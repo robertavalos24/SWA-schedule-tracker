@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "UserSchedules": {
+      "title": "UserSchedules",
+      "description": "User's synchronized schedule data.",
+      "type": "object",
+      "properties": {
+        "logs": {
+          "type": "object",
+          "description": "Daily logs for the user."
+        },
+        "midCounts": {
+          "type": "object",
+          "description": "Mid-shift counts for the user."
+        },
+        "fmlaCases": {
+          "type": "array",
+          "description": "List of FMLA cases."
+        },
+        "cardPrefs": {
+          "type": "object",
+          "description": "Preferences for cards."
+        },
+        "settings": {
+          "type": "object",
+          "description": "Settings for the schedule tracker."
+        },
+        "lockedMonths": {
+          "type": "array",
+          "description": "List of locked month strings."
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserSchedules"
+      },
+      "description": "Private application state for a user."
+    }
+  }
+}

@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SWA Backup JSON Diagnostic & Repair Utility</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons (via devicon or unpkg) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #0f172a;
+      color: #e2e8f0;
+    }
+    .font-mono-custom {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #1e293b;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #475569;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #64748b;
+    }
+  </style>
+</head>
+<body class="min-h-screen py-8 px-4 sm:px-6 lg:px-8 selection:bg-blue-600 selection:text-white">
+  <div class="max-w-4xl mx-auto">
+    
+    <!-- Header -->
+    <header class="text-center mb-8 border-b border-slate-800 pb-6">
+      <div class="inline-flex items-center justify-center p-3 bg-blue-600/10 rounded-2xl mb-4 border border-blue-500/20">
+        <i data-lucide="wrench" class="w-8 h-8 text-blue-400"></i>
+      </div>
+      <h1 class="text-3xl font-extrabold tracking-tight text-white sm:text-4xl">
+        Backup JSON Diagnostic & Repair Tool
+      </h1>
+      <p class="mt-2 text-sm text-slate-400 max-w-xl mx-auto leading-relaxed">
+        Paste or upload your SWA Schedule backup file here. This utility will automatically analyze, repair common JSON syntax issues, and generate a 100% valid backup file or a script to restore your data instantly.
+      </p>
+    </header>
+
+    <div class="grid grid-cols-1 gap-8">
+      
+      <!-- Box 1: Input -->
+      <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2">
+            <span class="flex items-center justify-center w-6 h-6 rounded-full bg-blue-500/10 text-blue-400 text-xs font-bold">1</span>
+            <h2 class="text-lg font-bold text-white">Load Backup Data</h2>
+          </div>
+          <label class="cursor-pointer text-xs bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg transition-all flex items-center gap-1.5 shadow-md active:scale-95">
+            <i data-lucide="file-up" class="w-4 h-4"></i>
+            Upload JSON File
+            <input type="file" id="fileInput" accept=".json" class="hidden">
+          </label>
+        </div>
+
+        <div class="space-y-3">
+          <label for="jsonText" class="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Paste raw JSON text here:</label>
+          <textarea id="jsonText" rows="12" class="w-full font-mono-custom text-xs bg-slate-950 border border-slate-800 rounded-xl p-4 text-emerald-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all placeholder:text-slate-700" placeholder='{ "logs": { ... }, "settings": { ... } }'></textarea>
+        </div>
+
+        <div class="flex gap-3 mt-4">
+          <button id="analyzeBtn" class="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl text-xs uppercase tracking-widest transition-all hover:brightness-110 active:scale-[0.98] shadow-lg flex items-center justify-center gap-2">
+            <i data-lucide="play" class="w-4 h-4"></i>
+            Analyze & Repair
+          </button>
+          <button id="clearBtn" class="px-5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs uppercase tracking-wider transition-all active:scale-[0.98]">
+            Clear
+          </button>
+        </div>
+      </section>
+
+      <!-- Box 2: Diagnostic Output (Hidden by default) -->
+      <section id="diagnosticsCard" class="hidden bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl transition-all">
+        <div class="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
+          <div class="flex items-center gap-2">
+            <span class="flex items-center justify-center w-6 h-6 rounded-full bg-blue-500/10 text-blue-400 text-xs font-bold">2</span>
+            <h2 class="text-lg font-bold text-white">Diagnostic & Health Report</h2>
+          </div>
+          <span id="healthBadge" class="text-xs px-2.5 py-1 rounded-full font-bold">Healthy</span>
+        </div>
+
+        <!-- Issue details if found -->
+        <div id="issueReport" class="hidden bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-xl p-4 mb-4 text-xs font-medium leading-relaxed">
+          <!-- Populated dynamically -->
+        </div>
+
+        <!-- Meta Grid -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+            <p class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Calendar Entries</p>
+            <p id="statLogs" class="text-2xl font-black text-white mt-1">0</p>
+            <p class="text-[10px] text-slate-500">Days Logged</p>
+          </div>
+          <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+            <p class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Settings</p>
+            <p id="statSettings" class="text-2xl font-black text-white mt-1">0</p>
+            <p class="text-[10px] text-slate-500">Configured Fields</p>
+          </div>
+          <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+            <p class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">FMLA Cases</p>
+            <p id="statFmla" class="text-2xl font-black text-white mt-1">0</p>
+            <p class="text-[10px] text-slate-500">Cases Tracked</p>
+          </div>
+          <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center">
+            <p class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Mid Counts</p>
+            <p id="statMids" class="text-2xl font-black text-white mt-1">0</p>
+            <p class="text-[10px] text-slate-500">Months Aggregated</p>
+          </div>
+        </div>
+
+        <!-- Action Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- Left: Download fixed JSON -->
+          <div class="bg-slate-950 p-5 rounded-xl border border-slate-800 flex flex-col justify-between">
+            <div>
+              <h3 class="text-sm font-bold text-white flex items-center gap-1.5">
+                <i data-lucide="file-check" class="text-emerald-400 w-4 h-4"></i>
+                Option A: Clean JSON Backup File
+              </h3>
+              <p class="text-xs text-slate-400 mt-2 leading-relaxed">
+                Download a cleanly formatted, 100% syntactically perfect JSON backup file. This file can be uploaded inside the main app under **Restore JSON**.
+              </p>
+            </div>
+            <button id="downloadBtn" class="mt-4 w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-lg text-xs uppercase tracking-widest transition-all shadow-md active:scale-95 flex items-center justify-center gap-1.5">
+              <i data-lucide="download" class="w-4 h-4"></i>
+              Download Repaired File
+            </button>
+          </div>
+
+          <!-- Right: Browser Console Script -->
+          <div class="bg-slate-950 p-5 rounded-xl border border-slate-800 flex flex-col justify-between">
+            <div>
+              <h3 class="text-sm font-bold text-white flex items-center gap-1.5">
+                <i data-lucide="terminal" class="text-blue-400 w-4 h-4"></i>
+                Option B: Direct Console Restore
+              </h3>
+              <p class="text-xs text-slate-400 mt-2 leading-relaxed">
+                If the file uploader is blocked, you can copy this magical block of JavaScript, open the main app tab, press **F12**, go to the **Console** tab, paste it, and press **Enter** to instantly restore your data!
+              </p>
+            </div>
+            <button id="copyScriptBtn" class="mt-4 w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-lg text-xs uppercase tracking-widest transition-all shadow-md active:scale-95 flex items-center justify-center gap-1.5">
+              <i data-lucide="copy" class="w-4 h-4"></i>
+              Copy Direct Console Code
+            </button>
+          </div>
+        </div>
+
+        <!-- Script Preview -->
+        <div class="mt-6">
+          <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Direct Console Script Preview:</label>
+          <div class="relative">
+            <pre id="scriptCode" class="w-full font-mono-custom text-[11px] bg-slate-950 border border-slate-800 rounded-xl p-4 overflow-x-auto max-h-48 text-blue-300"></pre>
+            <button id="copyScriptIconBtn" class="absolute top-2 right-2 p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-all active:scale-90" title="Copy code">
+              <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Box 3: Help / Instructions -->
+      <section class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        <h2 class="text-lg font-bold text-white flex items-center gap-2 mb-4">
+          <i data-lucide="help-circle" class="text-blue-400 w-5 h-5"></i>
+          How to restore using Console Option (Bypass standard restore UI)
+        </h2>
+        <div class="space-y-4 text-xs leading-relaxed text-slate-400">
+          <div class="flex gap-3">
+            <div class="flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-slate-300 font-bold shrink-0">1</div>
+            <p>Paste your JSON above and click <strong>Analyze & Repair</strong>. When healthy, click <strong>Copy Direct Console Code</strong>.</p>
+          </div>
+          <div class="flex gap-3">
+            <div class="flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-slate-300 font-bold shrink-0">2</div>
+            <p>Navigate to your <strong>SWA Schedule Builder Application page</strong> tab in your browser.</p>
+          </div>
+          <div class="flex gap-3">
+            <div class="flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-slate-300 font-bold shrink-0">3</div>
+            <p>Open Developer Tools by pressing <strong>F12</strong> (or <strong>Cmd+Option+I</strong> on Mac, or right-click anywhere and choose <strong>Inspect</strong>).</p>
+          </div>
+          <div class="flex gap-3">
+            <div class="flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-slate-300 font-bold shrink-0">4</div>
+            <p>Go to the <strong>Console</strong> tab in the panel that opens, paste the copied script at the prompt, and press <strong>Enter</strong>.</p>
+          </div>
+          <div class="flex gap-3">
+            <div class="flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-slate-300 font-bold shrink-0">5</div>
+            <p>You'll see a success message in the console! <strong>Refresh the page (F5)</strong>, and all your schedules, settings, pay raises, and history will be fully recovered.</p>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Footer -->
+    <footer class="text-center mt-12 text-slate-600 text-xs">
+      <p>SWA Schedule Builder Utility Applet &bull; Built to protect your valuable data.</p>
+    </footer>
+
+  </div>
+
+  <!-- Notification Toast -->
+  <div id="toast" class="fixed bottom-5 right-5 bg-emerald-600 text-white px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider shadow-lg flex items-center gap-2 translate-y-20 opacity-0 transition-all duration-300 pointer-events-none">
+    <i data-lucide="check-circle" class="w-4 h-4"></i>
+    <span id="toastMsg">Copied successfully!</span>
+  </div>
+
+  <script>
+    // Initialize Lucide Icons
+    lucide.createIcons();
+
+    // DOM Elements
+    const fileInput = document.getElementById('fileInput');
+    const jsonText = document.getElementById('jsonText');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const diagnosticsCard = document.getElementById('diagnosticsCard');
+    const healthBadge = document.getElementById('healthBadge');
+    const issueReport = document.getElementById('issueReport');
+    
+    const statLogs = document.getElementById('statLogs');
+    const statSettings = document.getElementById('statSettings');
+    const statFmla = document.getElementById('statFmla');
+    const statMids = document.getElementById('statMids');
+
+    const downloadBtn = document.getElementById('downloadBtn');
+    const copyScriptBtn = document.getElementById('copyScriptBtn');
+    const copyScriptIconBtn = document.getElementById('copyScriptIconBtn');
+    const scriptCode = document.getElementById('scriptCode');
+
+    const toast = document.getElementById('toast');
+    const toastMsg = document.getElementById('toastMsg');
+
+    let parsedResult = null;
+    let consoleScriptString = "";
+
+    // Show toast message helper
+    function showToast(message, isError = false) {
+      toastMsg.innerText = message;
+      if (isError) {
+        toast.classList.remove('bg-emerald-600');
+        toast.classList.add('bg-rose-600');
+      } else {
+        toast.classList.remove('bg-rose-600');
+        toast.classList.add('bg-emerald-600');
+      }
+      toast.classList.remove('translate-y-20', 'opacity-0');
+      setTimeout(() => {
+        toast.classList.add('translate-y-20', 'opacity-0');
+      }, 3000);
+    }
+
+    // Auto-analysis helper on file upload
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        jsonText.value = evt.target.result;
+        showToast("File uploaded successfully! Click Analyze to process.");
+        analyzeBtn.click();
+      };
+      reader.readAsText(file);
+    });
+
+    // Clear handler
+    clearBtn.addEventListener('click', () => {
+      jsonText.value = '';
+      diagnosticsCard.classList.add('hidden');
+      fileInput.value = '';
+      parsedResult = null;
+      consoleScriptString = "";
+      showToast("Cleared input workspace.");
+    });
+
+    // Repair engine
+    function tryRepairJSON(text) {
+      let cleaned = text.trim();
+      let diagnosticMessage = "";
+
+      // Step 1: Replace curly/smart quotes with standard quotes
+      if (cleaned.includes('“') || cleaned.includes('”') || cleaned.includes('‘') || cleaned.includes('’')) {
+        cleaned = cleaned.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+        diagnosticMessage += "• Corrected 'smart' (curly) double/single quotes to standard plain text quotes.\n";
+      }
+
+      // Step 2: Handle trailing commas in arrays and objects (e.g., [1, 2,] or {"a": 1,})
+      // We look for a comma followed directly by a closing brace or bracket with optional whitespace
+      const beforeLength = cleaned.length;
+      cleaned = cleaned.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']');
+      if (cleaned.length !== beforeLength) {
+        diagnosticMessage += "• Found and stripped trailing commas inside nested JSON structures.\n";
+      }
+
+      // Step 3: Parse
+      try {
+        const obj = JSON.parse(cleaned);
+        return { success: true, data: obj, msg: diagnosticMessage || "No common syntax errors found. Perfect clean format." };
+      } catch (firstErr) {
+        // If it still fails, let's try some advanced repairs
+        try {
+          // Attempt a rough unquoted-key fix if there are any
+          let advancedCleaned = cleaned.replace(/([{,]\s*)([a-zA-Z0-9_]+)\s*:/g, '$1"$2":');
+          const obj2 = JSON.parse(advancedCleaned);
+          diagnosticMessage += "• Discovered and wrapped unquoted property keys in standard double-quotes.\n";
+          return { success: true, data: obj2, msg: diagnosticMessage };
+        } catch (secondErr) {
+          // Return the best try with the original error
+          return { success: false, data: null, msg: "❌ JSON Parsing failed. The file is corrupted. Detail: " + firstErr.message };
+        }
+      }
+    }
+
+    // Analyze handler
+    analyzeBtn.addEventListener('click', () => {
+      const text = jsonText.value.trim();
+      if (!text) {
+        showToast("Workspace is empty. Please paste or upload a JSON backup.", true);
+        return;
+      }
+
+      const repairResult = tryRepairJSON(text);
+
+      // Make Diagnostics Card visible
+      diagnosticsCard.classList.remove('hidden');
+
+      if (repairResult.success) {
+        parsedResult = repairResult.data;
+        
+        // Show healthy/repaired badge
+        healthBadge.innerText = repairResult.msg.includes('•') ? "REPAIRED" : "HEALTHY";
+        healthBadge.className = "text-xs px-2.5 py-1 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+        
+        if (repairResult.msg.includes('•')) {
+          issueReport.classList.remove('hidden');
+          issueReport.innerHTML = `<strong>Auto-Repaired issues:</strong><br>${repairResult.msg.replace(/\n/g, '<br>')}`;
+        } else {
+          issueReport.classList.add('hidden');
+        }
+
+        // Calculate Stats
+        const logsCount = parsedResult.logs ? Object.keys(parsedResult.logs).length : 0;
+        const settingsCount = parsedResult.settings ? Object.keys(parsedResult.settings).length : 0;
+        const fmlaCount = Array.isArray(parsedResult.fmlaCases) ? parsedResult.fmlaCases.length : 0;
+        const midsCount = parsedResult.midCounts ? Object.keys(parsedResult.midCounts).length : 0;
+
+        statLogs.innerText = logsCount;
+        statSettings.innerText = settingsCount;
+        statFmla.innerText = fmlaCount;
+        statMids.innerText = midsCount;
+
+        // Generate script
+        generateConsoleScript();
+        showToast("Backup analyzed successfully. Read the report below.");
+      } else {
+        parsedResult = null;
+        consoleScriptString = "";
+        
+        healthBadge.innerText = "CORRUPTED";
+        healthBadge.className = "text-xs px-2.5 py-1 rounded-full font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20";
+        
+        issueReport.classList.remove('hidden');
+        issueReport.innerHTML = `<strong class="text-rose-400">Diagnosis Failed:</strong><br>${repairResult.msg}<br><br><span class="text-slate-400">Tips: Please ensure the pasted text has correct matching brackets '{' and '}', and matches a valid backup structure.</span>`;
+
+        statLogs.innerText = '-';
+        statSettings.innerText = '-';
+        statFmla.innerText = '-';
+        statMids.innerText = '-';
+
+        scriptCode.innerText = "// Console Script Unavailable due to parse failure.";
+        showToast("Diagnostics failed: Invalid JSON syntax.", true);
+      }
+    });
+
+    // Generate Console Script
+    function generateConsoleScript() {
+      if (!parsedResult) return;
+
+      // Escape quotes for JavaScript string embedding
+      const jsonString = JSON.stringify(parsedResult);
+      
+      consoleScriptString = `(async () => {
+  const data = ${jsonString};
+  console.log("Starting LocalStorage Recovery...", data);
+
+  try {
+    // 1. Logs / Shifts
+    if (data.logs) {
+      localStorage.setItem('swa_logs_main', JSON.stringify(data.logs));
+      console.log("✓ Restored " + Object.keys(data.logs).length + " schedule entries");
+    }
+
+    // 2. Mid Shifts
+    if (data.midCounts) {
+      localStorage.setItem('swa_midCounts_main', JSON.stringify(data.midCounts));
+      console.log("✓ Restored mid shifts");
+    }
+
+    // 3. FMLA cases
+    if (data.fmlaCases) {
+      localStorage.setItem('swa_fmlaCases', JSON.stringify(data.fmlaCases));
+      console.log("✓ Restored " + data.fmlaCases.length + " FMLA cases");
+    }
+
+    // 4. Card Prefs
+    if (data.cardPrefs) {
+      localStorage.setItem('swa_card_prefs_main', JSON.stringify(data.cardPrefs));
+      console.log("✓ Restored custom card display preferences");
+    }
+
+    // 5. App State / Theme / Lock Screen
+    if (data.backup_metadata) {
+      if (data.backup_metadata.theme) {
+        localStorage.setItem('swa_theme', data.backup_metadata.theme);
+      }
+      if (data.backup_metadata.is_locked !== undefined) {
+        localStorage.setItem('swa_isLocked', String(data.backup_metadata.is_locked));
+      }
+      if (data.backup_metadata.locked_months) {
+        localStorage.setItem('swa_lockedMonths', JSON.stringify(data.backup_metadata.locked_months));
+      }
+      console.log("✓ Restored system metadata & preferences");
+    }
+
+    // 6. Settings fields
+    if (data.settings) {
+      Object.keys(data.settings).forEach(key => {
+        const val = data.settings[key];
+        if (key === 'payHistory') {
+          localStorage.setItem('swa_' + key, JSON.stringify(val));
+        } else {
+          localStorage.setItem('swa_' + key, String(val));
+        }
+      });
+      console.log("✓ Restored all salary settings, tax rates, and raise milestones");
+    }
+
+    console.log("%cSUCCESS! ALL RESTORE PROCESSES COMPLETE PERFECTLY. Please hit F5 to reload the SWA Schedule Builder page!", "color: #10b981; font-weight: bold; font-size: 14px;");
+    alert("SUCCESS! Backup fully injected into Local Storage.\\n\\nPlease press F5 / reload the page to load your recovered data!");
+  } catch (err) {
+    console.error("❌ Recovery Injection Failed: ", err);
+    alert("Injection failed: " + err.message);
+  }
+})();`;
+
+      scriptCode.innerText = consoleScriptString;
+    }
+
+    // Download Handler
+    downloadBtn.addEventListener('click', () => {
+      if (!parsedResult) return;
+      
+      const dataStr = JSON.stringify(parsedResult, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `SWA_Repaired_Backup_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("Repaired JSON backup file download started!");
+    });
+
+    // Copy handlers
+    function copyText(text) {
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => {
+        showToast("Copied script code to clipboard!");
+      }).catch(err => {
+        // Fallback
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showToast("Copied script code to clipboard!");
+      });
+    }
+
+    copyScriptBtn.addEventListener('click', () => copyText(consoleScriptString));
+    copyScriptIconBtn.addEventListener('click', () => copyText(consoleScriptString));
+
+  </script>
+</body>
+</html>
