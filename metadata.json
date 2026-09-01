@@ -1,5 +1,8 @@
 {
   "name": "Remix SWA Schedule Tracker 2.0",
-  "description": "From the broken one\n",
-  "requestFramePermissions": []
+  "description": "SWA Schedule & Attendance Tracker with real-time calculations, Cloud sync, and pay auditing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

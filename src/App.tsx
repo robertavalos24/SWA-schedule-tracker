@@ -1451,9 +1451,10 @@ export default function App() {
       />
       
       <motion.div 
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-[1600px] mx-auto my-3 px-4 pb-10"
+        transition={{ duration: 0.3 }}
+        className="max-w-[1600px] w-full mx-auto my-2 sm:my-4 px-3 sm:px-6 lg:px-8 pb-12 box-border"
       >
         <SettingsBar 
           settings={settings} 
@@ -1528,54 +1529,54 @@ export default function App() {
           triggerClearMonth={triggerClearMonth}
         />
 
-        <div className="flex gap-3 mt-8 flex-wrap justify-center items-center">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 mt-6 sm:mt-8 max-w-4xl mx-auto">
           {!isLocked && (
             <>
               <button 
-                className="flex items-center gap-2 px-4 py-2.5 bg-[var(--card-bg)] border-2 border-[var(--border-color)] text-[var(--pay-green)] font-black rounded-xl text-xs transition-all hover:border-[var(--pay-green)] hover:shadow-sm cursor-pointer" 
+                className="flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2.5 bg-[var(--card-bg)] border border-[var(--border-color)] text-[var(--pay-green)] font-bold rounded-xl text-xs transition-all hover:border-[var(--pay-green)] hover:bg-[var(--hover-bg)] active:scale-95 cursor-pointer shadow-sm" 
                 onClick={() => fileInputRef.current?.click()}
               >
-                <Upload size={14} />
-                Smart Import (CSV/HTML/XML/Excel)
+                <Upload size={14} className="flex-shrink-0" />
+                <span className="truncate">Smart Import</span>
               </button>
               <input type="file" ref={fileInputRef} className="hidden" accept=".csv, .xlsx, .xls, .html, .htm, .xml" multiple onChange={handleSmartImport} />
             </>
           )}
           
           <button 
-            className="flex items-center gap-2 px-4 py-2.5 bg-[var(--card-bg)] border-2 border-[var(--border-color)] text-[var(--pay-green)] font-black rounded-xl text-xs transition-all hover:border-[var(--pay-green)] hover:shadow-sm cursor-pointer" 
+            className="flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2.5 bg-[var(--card-bg)] border border-[var(--border-color)] text-[var(--pay-green)] font-bold rounded-xl text-xs transition-all hover:border-[var(--pay-green)] hover:bg-[var(--hover-bg)] active:scale-95 cursor-pointer shadow-sm" 
             onClick={() => exportCSV(logs)}
           >
-            <Download size={14} />
-            Export to Excel
+            <Download size={14} className="flex-shrink-0" />
+            <span className="truncate">Export Excel</span>
           </button>
 
           <button 
-            className="flex items-center gap-2 px-4 py-2.5 bg-[var(--card-bg)] border-2 border-[var(--border-color)] text-[var(--swa-blue)] font-black rounded-xl text-xs transition-all hover:border-[var(--swa-blue)] hover:shadow-sm cursor-pointer" 
+            className="flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2.5 bg-[var(--card-bg)] border border-[var(--border-color)] text-[var(--swa-blue)] font-bold rounded-xl text-xs transition-all hover:border-[var(--swa-blue)] hover:bg-[var(--hover-bg)] active:scale-95 cursor-pointer shadow-sm" 
             onClick={handleBackup}
           >
-            <Download size={14} />
-            Backup JSON
+            <Download size={14} className="flex-shrink-0" />
+            <span className="truncate">Backup JSON</span>
           </button>
 
           <button 
-            className="flex items-center gap-2 px-4 py-2.5 bg-[var(--card-bg)] border-2 border-[var(--border-color)] text-[var(--ra-purple)] font-black rounded-xl text-xs transition-all hover:border-[var(--ra-purple)] hover:shadow-sm cursor-pointer" 
+            className="flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2.5 bg-[var(--card-bg)] border border-[var(--border-color)] text-[var(--ra-purple)] font-bold rounded-xl text-xs transition-all hover:border-[var(--ra-purple)] hover:bg-[var(--hover-bg)] active:scale-95 cursor-pointer shadow-sm" 
             onClick={() => backupInputRef.current?.click()}
           >
-            <RotateCcw size={14} />
-            Restore JSON
+            <RotateCcw size={14} className="flex-shrink-0" />
+            <span className="truncate">Restore JSON</span>
           </button>
           <input type="file" ref={backupInputRef} className="hidden" accept=".json" onChange={handleImportBackup} />
         </div>
         
         {!isLocked && (
-          <div className="text-center mt-6">
+          <div className="text-center mt-5 sm:mt-6">
             <button 
               onClick={() => openModal('confirmReset')} 
-              className="flex items-center gap-2 mx-auto bg-[var(--card-bg)] border-2 border-red-200 text-[var(--swa-red)] px-6 py-2.5 font-black cursor-pointer rounded-xl text-[11px] transition-all hover:border-[var(--swa-red)] hover:bg-[var(--swa-red)] hover:text-white shadow-sm"
+              className="inline-flex items-center justify-center gap-2 bg-[var(--card-bg)] border border-red-200 dark:border-red-900/40 text-[var(--swa-red)] px-4 sm:px-6 py-2 sm:py-2.5 font-bold cursor-pointer rounded-xl text-[11px] sm:text-xs transition-all hover:border-[var(--swa-red)] hover:bg-[var(--swa-red)] hover:text-white active:scale-95 shadow-sm"
             >
-              <Trash2 size={14} />
-              RESET ALL CALENDAR DATA
+              <Trash2 size={13} />
+              <span>Reset All Calendar Data</span>
             </button>
           </div>
         )}

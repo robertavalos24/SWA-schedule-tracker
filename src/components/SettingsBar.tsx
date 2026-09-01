@@ -57,30 +57,32 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
   }
 
   return (
-    <div className="bg-[var(--card-bg)] p-4 rounded-2xl mb-6 shadow-sm border border-black/5 box-border flex flex-col gap-4">
-      {/* First Row */}
-      <div className="flex flex-wrap items-stretch gap-3">
-        <div className="bg-[var(--sub-bg)] p-2 rounded-xl border border-[var(--border-color)] flex-1 min-w-[110px] flex flex-col justify-between">
-          <label className="text-[10px] font-black text-[var(--text-muted)] uppercase mb-1.5 flex items-center gap-1.5 px-1 whitespace-nowrap">
-            <Calendar size={10} className="text-[var(--swa-blue)] flex-shrink-0" />
+    <div className="bg-[var(--card-bg)] p-3 sm:p-5 rounded-2xl mb-4 sm:mb-6 shadow-sm border border-[var(--border-color)] box-border flex flex-col gap-3 sm:gap-4 transition-all">
+      {/* Primary Parameters Grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-9 gap-2 sm:gap-3">
+        {/* Hire Date */}
+        <div className="bg-[var(--sub-bg)] p-2 sm:p-2.5 rounded-xl border border-[var(--border-color)] flex flex-col justify-between">
+          <label className="text-[10px] sm:text-[11px] font-black text-[var(--text-muted)] uppercase mb-1 flex items-center gap-1.5 whitespace-nowrap">
+            <Calendar size={12} className="text-[var(--swa-blue)] flex-shrink-0" />
             Hire Date
           </label>
           <input 
             type="date" 
-            className="p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all"
+            className="p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all"
             value={settings.hireDate}
             onChange={(e) => updateSettings({ hireDate: e.target.value })}
           />
         </div>
 
-        <div className="bg-[var(--sub-bg)] p-2 rounded-xl border border-[var(--border-color)] flex-1 min-w-[70px] max-w-[100px] flex flex-col justify-between">
-          <label className="text-[10px] font-black text-[var(--text-muted)] uppercase mb-1.5 flex items-center gap-1.5 px-1 whitespace-nowrap">
-            <User size={10} className="text-[var(--swa-blue)] flex-shrink-0" />
-            Lvl
+        {/* Level */}
+        <div className="bg-[var(--sub-bg)] p-2 sm:p-2.5 rounded-xl border border-[var(--border-color)] flex flex-col justify-between">
+          <label className="text-[10px] sm:text-[11px] font-black text-[var(--text-muted)] uppercase mb-1 flex items-center gap-1.5 whitespace-nowrap">
+            <User size={12} className="text-[var(--swa-blue)] flex-shrink-0" />
+            Level
           </label>
           <div className="relative">
             <select 
-              className={`p-2 pr-8 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all appearance-none cursor-pointer relative z-10 ${(settings.payHistory && settings.payHistory.length > 0) ? 'opacity-80 pointer-events-none' : ''}`}
+              className={`p-1.5 sm:p-2 pr-6 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all appearance-none cursor-pointer ${(settings.payHistory && settings.payHistory.length > 0) ? 'opacity-80 pointer-events-none' : ''}`}
               value={(settings.payHistory && settings.payHistory.length > 0) ? effectiveLevel : settings.empLevel}
               disabled={(settings.payHistory && settings.payHistory.length > 0)}
               onChange={(e) => {
@@ -91,7 +93,6 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
                 else if (newLevel === 'P3' || newLevel === 'P4') newStiBonusPct = '5';
                 updateSettings({ empLevel: newLevel, stiBonusPct: newStiBonusPct });
               }}
-              style={{ WebkitAppearance: 'none', MozAppearance: 'none' }}
             >
               <option value="P1">P1</option>
               <option value="P2">P2</option>
@@ -99,53 +100,56 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
               <option value="P4">P4</option>
             </select>
             <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)]">
-              <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <svg width="8" height="5" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </div>
           </div>
         </div>
 
-        <div className="bg-[var(--sub-bg)] p-2 rounded-xl border border-[var(--border-color)] flex-1 min-w-[120px] flex flex-col justify-between">
-          <label className="text-[10px] font-black text-[var(--text-muted)] uppercase mb-1.5 flex items-center gap-1.5 px-1 whitespace-nowrap">
-            <Calendar size={10} className="text-[var(--swa-blue)] flex-shrink-0" />
+        {/* PTO As Of */}
+        <div className="bg-[var(--sub-bg)] p-2 sm:p-2.5 rounded-xl border border-[var(--border-color)] flex flex-col justify-between">
+          <label className="text-[10px] sm:text-[11px] font-black text-[var(--text-muted)] uppercase mb-1 flex items-center gap-1.5 whitespace-nowrap">
+            <Calendar size={12} className="text-[var(--swa-blue)] flex-shrink-0" />
             PTO As Of
           </label>
           <input 
             type="date" 
-            className="p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all"
+            className="p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all"
             value={settings.asOfDate}
             onChange={(e) => updateSettings({ asOfDate: e.target.value })}
           />
         </div>
 
-        <div className="bg-[var(--sub-bg)] p-2 rounded-xl border border-[var(--border-color)] flex-1 min-w-[90px] flex flex-col justify-between">
+        {/* PTO Balance */}
+        <div className="bg-[var(--sub-bg)] p-2 sm:p-2.5 rounded-xl border border-[var(--border-color)] flex flex-col justify-between">
           <label 
-            className="text-[10px] font-black text-[var(--text-muted)] uppercase mb-1.5 flex items-center gap-1.5 px-1 cursor-pointer hover:text-[var(--swa-orange)] transition-colors whitespace-nowrap"
+            className="text-[10px] sm:text-[11px] font-black text-[var(--text-muted)] uppercase mb-1 flex items-center gap-1.5 cursor-pointer hover:text-[var(--swa-orange)] transition-colors whitespace-nowrap"
             onClick={() => openModal('correction')}
-            title="Add a balance correction"
+            title="Click to add a PTO balance correction"
           >
-            <TrendingUp size={10} className="text-[var(--swa-blue)] flex-shrink-0" />
+            <TrendingUp size={12} className="text-[var(--swa-blue)] flex-shrink-0" />
             PTO Bal
-            {(settings.correctionDate || settings.accrualChangeDate) && <span className="w-1.5 h-1.5 rounded-full bg-[var(--swa-orange)] animate-pulse ml-auto" title="Correction / Accrual Override Applied"></span>}
+            {(settings.correctionDate || settings.accrualChangeDate) && <span className="w-2 h-2 rounded-full bg-[var(--swa-orange)] animate-pulse ml-auto" title="Correction applied"></span>}
           </label>
           <input 
             type="number" 
             step="any"
-            className="p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all"
+            className="p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all"
             value={settings.startPto}
             onChange={(e) => updateSettings({ startPto: e.target.value })}
           />
         </div>
 
-        <div className="bg-[var(--sub-bg)] p-2 rounded-xl border border-[var(--border-color)] flex-1 min-w-[170px] flex flex-col justify-between">
-          <label className="text-[10px] font-black text-[var(--text-muted)] uppercase mb-1.5 flex items-center gap-1.5 px-1 whitespace-nowrap">
-            <DollarSign size={10} className="text-[var(--swa-blue)] flex-shrink-0" />
-            Base Salary (Jan-Feb)
+        {/* Base Salary */}
+        <div className="bg-[var(--sub-bg)] p-2 sm:p-2.5 rounded-xl border border-[var(--border-color)] flex flex-col justify-between col-span-2 sm:col-span-1 md:col-span-2 lg:col-span-1 xl:col-span-1">
+          <label className="text-[10px] sm:text-[11px] font-black text-[var(--text-muted)] uppercase mb-1 flex items-center gap-1.5 whitespace-nowrap">
+            <DollarSign size={12} className="text-[var(--swa-blue)] flex-shrink-0" />
+            Base (Jan-Feb)
           </label>
           <input 
             type="text" 
-            className={`p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all ${settings.payHistory && settings.payHistory.length > 0 ? 'opacity-70 cursor-not-allowed' : ''}`}
+            className={`p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all ${settings.payHistory && settings.payHistory.length > 0 ? 'opacity-70 cursor-not-allowed' : ''}`}
             value={tempBaseSalary !== undefined ? tempBaseSalary : baseSalary}
             readOnly={!!(settings.payHistory && settings.payHistory.length > 0)}
             onFocus={(e) => {
@@ -170,23 +174,25 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
           />
         </div>
 
-        <div className="bg-[var(--sub-bg)] p-2 rounded-xl border border-[var(--border-color)] flex-1 min-w-[120px] flex flex-col justify-between">
-          <label className="text-[10px] font-black text-[var(--text-muted)] uppercase mb-1.5 flex items-center gap-1.5 px-1 whitespace-nowrap">
-            <Info size={10} className="text-[var(--swa-blue)] flex-shrink-0" />
+        {/* Hourly Rate */}
+        <div className="bg-[var(--sub-bg)] p-2 sm:p-2.5 rounded-xl border border-[var(--border-color)] flex flex-col justify-between">
+          <label className="text-[10px] sm:text-[11px] font-black text-[var(--text-muted)] uppercase mb-1 flex items-center gap-1.5 whitespace-nowrap">
+            <Clock size={12} className="text-[var(--swa-blue)] flex-shrink-0" />
             Hourly Rate
           </label>
-          <div className="p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--hover-bg)] font-black text-[var(--swa-blue)] text-center">
+          <div className="p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--hover-bg)] font-black text-[var(--swa-blue)] text-center truncate">
             {hourlyRate}
           </div>
         </div>
 
-        <div className="bg-[var(--sub-bg)] p-2 rounded-xl border border-[var(--border-color)] flex-1 min-w-[80px] flex flex-col justify-between">
-          <label className="text-[10px] font-black text-[var(--text-muted)] uppercase mb-1.5 flex items-center gap-1.5 px-1 whitespace-nowrap">
-            <Percent size={10} className="text-[var(--swa-blue)] flex-shrink-0" />
-            Raise
+        {/* Raise % */}
+        <div className="bg-[var(--sub-bg)] p-2 sm:p-2.5 rounded-xl border border-[var(--border-color)] flex flex-col justify-between">
+          <label className="text-[10px] sm:text-[11px] font-black text-[var(--text-muted)] uppercase mb-1 flex items-center gap-1.5 whitespace-nowrap">
+            <Percent size={12} className="text-[var(--swa-blue)] flex-shrink-0" />
+            Raise %
           </label>
           <select 
-            className="p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all appearance-none cursor-pointer"
+            className="p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all appearance-none cursor-pointer"
             value={settings.pctIncrease}
             onChange={(e) => updateSettings({ pctIncrease: e.target.value })}
           >
@@ -196,22 +202,23 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
           </select>
         </div>
 
+        {/* Current Salary (Mar-Dec) */}
         <div 
-          className="bg-[var(--sub-bg)] p-2 rounded-xl border border-[var(--border-color)] group flex-1 min-w-[190px] flex flex-col justify-between"
+          className="bg-[var(--sub-bg)] p-2 sm:p-2.5 rounded-xl border border-[var(--border-color)] group flex flex-col justify-between col-span-2 sm:col-span-1 md:col-span-2 lg:col-span-1 xl:col-span-1"
           title="Input current Mar-Dec salary to auto-calculate Jan-Feb Base Salary based on Raise %"
         >
-          <label className="text-[10px] font-black text-[var(--text-muted)] uppercase mb-1.5 flex items-center justify-between px-1 whitespace-nowrap">
-            <div className="flex items-center gap-1.5 cursor-pointer hover:text-[var(--swa-blue)] transition-colors" onClick={() => openModal('ytdSummary')}>
-              <DollarSign size={10} className="text-[var(--swa-blue)] flex-shrink-0" />
-              Current Salary (Mar-Dec)
+          <label className="text-[10px] sm:text-[11px] font-black text-[var(--text-muted)] uppercase mb-1 flex items-center justify-between whitespace-nowrap">
+            <div className="flex items-center gap-1.5 cursor-pointer hover:text-[var(--swa-blue)] transition-colors truncate" onClick={() => openModal('ytdSummary')}>
+              <DollarSign size={12} className="text-[var(--swa-blue)] flex-shrink-0" />
+              Mar-Dec Salary
             </div>
             <div title="Click to view Annual Pay Breakdown">
-              <Edit2 size={10} className="opacity-60 cursor-pointer hover:opacity-100 transition-opacity" onClick={() => openModal('ytdSummary')} />
+              <Edit2 size={11} className="opacity-60 cursor-pointer hover:opacity-100 transition-opacity" onClick={() => openModal('ytdSummary')} />
             </div>
           </label>
           <input 
             type="text" 
-            className={`p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-black text-center focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all ${settings.payHistory && settings.payHistory.length > 0 ? 'opacity-70 cursor-not-allowed' : ''}`}
+            className={`p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-black text-center focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all ${settings.payHistory && settings.payHistory.length > 0 ? 'opacity-70 cursor-not-allowed' : ''}`}
             value={tempCalculatedSalary !== undefined ? tempCalculatedSalary : calculatedSalary}
             readOnly={!!(settings.payHistory && settings.payHistory.length > 0)}
             onFocus={(e) => {
@@ -238,20 +245,21 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
           />
         </div>
 
+        {/* Latest Salary (Dec 31) */}
         {calculatedSalary !== endOfYearSalary && (
-          <div className="bg-[var(--sub-bg)] p-2 rounded-xl border border-[var(--border-color)] flex-1 min-w-[160px] flex flex-col justify-between">
-            <label className="text-[10px] font-black text-[var(--text-muted)] uppercase mb-1.5 flex items-center justify-between px-1 whitespace-nowrap">
-              <div className="flex items-center gap-1.5 cursor-pointer hover:text-[var(--swa-blue)] transition-colors" onClick={() => openModal('ytdSummary')}>
-                <DollarSign size={10} className="text-[var(--swa-blue)] flex-shrink-0" />
-                Latest Salary (Dec 31)
+          <div className="bg-[var(--sub-bg)] p-2 sm:p-2.5 rounded-xl border border-[var(--border-color)] flex flex-col justify-between col-span-2 sm:col-span-1 md:col-span-2 lg:col-span-1 xl:col-span-1">
+            <label className="text-[10px] sm:text-[11px] font-black text-[var(--text-muted)] uppercase mb-1 flex items-center justify-between whitespace-nowrap">
+              <div className="flex items-center gap-1.5 cursor-pointer hover:text-[var(--swa-blue)] transition-colors truncate" onClick={() => openModal('ytdSummary')}>
+                <DollarSign size={12} className="text-[var(--swa-blue)] flex-shrink-0" />
+                Dec 31 Salary
               </div>
               <div title="Includes any promotions or adjustments during the year.">
-                <Info size={10} className="opacity-60 cursor-help" />
+                <Info size={11} className="opacity-60 cursor-help" />
               </div>
             </label>
             <input 
               type="text" 
-              className="p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-black text-center focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all opacity-80 cursor-default"
+              className="p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-black text-center focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all opacity-80 cursor-default"
               value={endOfYearSalary}
               readOnly
             />
@@ -260,20 +268,20 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
       </div>
 
       {/* Action Buttons Row */}
-      <div className="flex flex-wrap items-stretch gap-3 border-t border-[var(--border-color)] pt-4 mt-2">
-      {/* Action Buttons */}
-        <div className="relative group flex-1 min-w-[150px]">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 border-t border-[var(--border-color)] pt-3 sm:pt-4">
+        {/* FMLA Manage */}
+        <div className="relative group">
           <button 
             onClick={() => openModal('fmlaManager')}
-            className={`flex items-center justify-center gap-2 p-2.5 font-black cursor-pointer bg-[var(--input-bg)] text-[var(--swa-blue)] border-2 border-[var(--border-color)] rounded-xl w-full h-full transition-all hover:border-[var(--swa-blue)] hover:shadow-sm relative ${fmlaStatus === 'danger' ? 'animate-pulse border-[var(--swa-red)] shadow-[0_0_8px_var(--swa-red)]' : fmlaStatus === 'warning' ? 'animate-pulse border-[var(--swa-orange)] shadow-[0_0_8px_var(--swa-orange)]' : ''}`}
+            className={`flex items-center justify-center gap-1.5 sm:gap-2 p-2 sm:p-2.5 font-bold text-xs cursor-pointer bg-[var(--input-bg)] text-[var(--swa-blue)] border border-[var(--border-color)] rounded-xl w-full h-full transition-all hover:border-[var(--swa-blue)] hover:bg-[var(--hover-bg)] active:scale-95 shadow-sm relative ${fmlaStatus === 'danger' ? 'animate-pulse border-[var(--swa-red)] shadow-[0_0_8px_var(--swa-red)]' : fmlaStatus === 'warning' ? 'animate-pulse border-[var(--swa-orange)] shadow-[0_0_8px_var(--swa-orange)]' : ''}`}
           >
-            <Briefcase size={14} />
-            Manage FMLA
+            <Briefcase size={14} className="flex-shrink-0" />
+            <span className="truncate">Manage FMLA</span>
             {fmlaStatus !== 'none' && (
-              <span className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${fmlaStatus === 'danger' ? 'bg-[var(--swa-red)]' : 'bg-[var(--swa-orange)]'} animate-ping`} />
+              <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ${fmlaStatus === 'danger' ? 'bg-[var(--swa-red)]' : 'bg-[var(--swa-orange)]'} animate-ping`} />
             )}
             {fmlaStatus !== 'none' && (
-              <span className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${fmlaStatus === 'danger' ? 'bg-[var(--swa-red)]' : 'bg-[var(--swa-orange)]'}`} />
+              <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ${fmlaStatus === 'danger' ? 'bg-[var(--swa-red)]' : 'bg-[var(--swa-orange)]'}`} />
             )}
           </button>
           
@@ -348,46 +356,50 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
           )}
         </div>
 
+        {/* STI Bonus */}
         <button 
           onClick={() => openModal('sti')}
-          className="flex-1 min-w-[150px] flex items-center justify-center gap-2 p-2.5 font-black cursor-pointer bg-[var(--input-bg)] text-[var(--pay-green)] border-2 border-[var(--border-color)] rounded-xl h-full transition-all hover:border-[var(--pay-green)] hover:shadow-sm"
+          className="flex items-center justify-center gap-1.5 sm:gap-2 p-2 sm:p-2.5 font-bold text-xs cursor-pointer bg-[var(--input-bg)] text-[var(--pay-green)] border border-[var(--border-color)] rounded-xl h-full transition-all hover:border-[var(--pay-green)] hover:bg-[var(--hover-bg)] active:scale-95 shadow-sm"
         >
-          <TrendingUp size={14} />
-          STI Bonus
+          <TrendingUp size={14} className="flex-shrink-0" />
+          <span className="truncate">STI Bonus</span>
         </button>
 
+        {/* Promotion */}
         <button 
           onClick={() => openModal('payHistory')}
-          className="flex-1 min-w-[150px] flex items-center justify-center gap-2 p-2.5 font-black cursor-pointer bg-[var(--input-bg)] text-[var(--swa-blue)] border-2 border-[var(--border-color)] rounded-xl h-full transition-all hover:border-[var(--swa-blue)] hover:shadow-sm"
+          className="flex items-center justify-center gap-1.5 sm:gap-2 p-2 sm:p-2.5 font-bold text-xs cursor-pointer bg-[var(--input-bg)] text-[var(--swa-blue)] border border-[var(--border-color)] rounded-xl h-full transition-all hover:border-[var(--swa-blue)] hover:bg-[var(--hover-bg)] active:scale-95 shadow-sm"
         >
-          <Plus size={14} />
-          Add Promotion
+          <Plus size={14} className="flex-shrink-0" />
+          <span className="truncate">Add Promotion</span>
         </button>
 
+        {/* Market Adjustment */}
         <button 
           onClick={() => openModal('payHistory')}
-          className="flex-1 min-w-[150px] flex items-center justify-center gap-2 p-2.5 font-black cursor-pointer bg-[var(--input-bg)] text-[var(--swa-red)] border-2 border-[var(--border-color)] rounded-xl h-full transition-all hover:border-[var(--swa-red)] hover:shadow-sm"
+          className="flex items-center justify-center gap-1.5 sm:gap-2 p-2 sm:p-2.5 font-bold text-xs cursor-pointer bg-[var(--input-bg)] text-[var(--swa-red)] border border-[var(--border-color)] rounded-xl h-full transition-all hover:border-[var(--swa-red)] hover:bg-[var(--hover-bg)] active:scale-95 shadow-sm"
         >
-          <Plus size={14} />
-          Market Adjustment
+          <Plus size={14} className="flex-shrink-0" />
+          <span className="truncate">Market Adj</span>
         </button>
 
+        {/* Pay History */}
         <button 
           onClick={() => openModal('payHistory')}
-          className="flex-1 min-w-[150px] flex items-center justify-center gap-2 p-2.5 font-black cursor-pointer bg-[var(--input-bg)] text-[var(--text-main)] border-2 border-[var(--border-color)] rounded-xl h-full transition-all hover:border-[var(--text-main)] hover:shadow-sm"
+          className="flex items-center justify-center gap-1.5 sm:gap-2 p-2 sm:p-2.5 font-bold text-xs cursor-pointer bg-[var(--input-bg)] text-[var(--text-main)] border border-[var(--border-color)] rounded-xl h-full transition-all hover:border-[var(--text-main)] hover:bg-[var(--hover-bg)] active:scale-95 shadow-sm col-span-2 sm:col-span-1"
         >
-          <History size={14} />
-          Pay History
+          <History size={14} className="flex-shrink-0" />
+          <span className="truncate">Pay History</span>
         </button>
       </div>
 
-      {/* Row 3 - Tax settings */}
-      <div className="border-t border-[var(--border-color)] pt-4 mt-2 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="flex items-center gap-3 bg-[var(--sub-bg)] px-3 py-2 rounded-xl border border-[var(--border-color)]">
-            <span className="text-[10px] font-black text-[var(--swa-blue)] uppercase tracking-wider flex items-center gap-1.5">
-              <ShieldCheck size={13} className="text-[var(--pay-green)]" />
-              Taxes Withholding
+      {/* Row 3 - Tax settings & Utilities */}
+      <div className="border-t border-[var(--border-color)] pt-3 sm:pt-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2.5 bg-[var(--sub-bg)] px-3 py-1.5 sm:py-2 rounded-xl border border-[var(--border-color)]">
+            <span className="text-[10px] sm:text-[11px] font-black text-[var(--swa-blue)] uppercase tracking-wider flex items-center gap-1.5">
+              <ShieldCheck size={14} className="text-[var(--pay-green)] flex-shrink-0" />
+              Taxes
             </span>
             <button 
               type="button"
@@ -404,39 +416,43 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
             </button>
           </div>
           {settings.enableTaxes === 'true' && (
-            <div className="flex items-center gap-2.5 text-xs font-semibold text-[var(--text-main)] bg-[var(--sub-bg)] px-3 py-2 rounded-xl border border-[var(--border-color)]">
-              <span>Filing: <span className="text-[var(--swa-blue)] font-black uppercase text-[10px]">{settings.taxFilingStatus || 'single'}</span></span>
+            <div className="flex items-center gap-2 text-xs font-semibold text-[var(--text-main)] bg-[var(--sub-bg)] px-3 py-1.5 sm:py-2 rounded-xl border border-[var(--border-color)] flex-wrap">
+              <span>Filing: <span className="text-[var(--swa-blue)] font-black uppercase text-[10px] sm:text-xs">{settings.taxFilingStatus || 'single'}</span></span>
               <span className="text-[var(--border-color)]">|</span>
-              <span>Children: <span className="text-[var(--swa-blue)] font-black text-xs">{settings.taxDependents || '0'}</span></span>
+              <span>Dep: <span className="text-[var(--swa-blue)] font-black">{settings.taxDependents || '0'}</span></span>
               {settings.fedTaxExempt === 'true' && (
                 <>
                   <span className="text-[var(--border-color)]">|</span>
-                  <span className="bg-[var(--swa-red)]/10 text-[var(--swa-red)] text-[9px] px-2 py-0.5 rounded font-black tracking-wider uppercase">Fed Exempt</span>
+                  <span className="bg-[var(--swa-red)]/10 text-[var(--swa-red)] text-[9px] px-1.5 py-0.5 rounded font-black uppercase">Fed Exempt</span>
                 </>
               )}
               <button 
                 onClick={() => openModal('taxSettings')}
-                className="ml-2 text-[10px] text-[var(--swa-blue)] hover:underline font-black uppercase tracking-wider flex items-center gap-1"
+                className="ml-1 text-[10px] sm:text-[11px] text-[var(--swa-blue)] hover:underline font-black uppercase tracking-wider cursor-pointer"
               >
                 ⚙️ Adjust
               </button>
             </div>
           )}
         </div>
-        {settings.enableTaxes === 'true' && (
-          <div className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider flex items-center gap-1.5 bg-[var(--sub-bg)] px-3 py-2 rounded-xl border border-[var(--border-color)] text-right">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--pay-green)] animate-pulse"></span>
-            TX STATE TAX APPLIED (0.00% RATE)
-          </div>
-        )}
         
-        <button 
-          onClick={resetAppData}
-          className="ml-auto text-[10px] font-black uppercase tracking-wider text-[var(--swa-red)] hover:bg-[var(--swa-red)]/10 px-3 py-2 rounded-xl border border-[var(--swa-red)]/30 transition-colors flex items-center gap-1.5"
-          title="Factory Reset App Data"
-        >
-          <Trash2 size={13} /> Reset App Data
-        </button>
+        <div className="flex items-center gap-2 ml-auto">
+          {settings.enableTaxes === 'true' && (
+            <div className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider hidden lg:flex items-center gap-1.5 bg-[var(--sub-bg)] px-2.5 py-1.5 rounded-xl border border-[var(--border-color)]">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--pay-green)] animate-pulse"></span>
+              TX State Tax (0.00%)
+            </div>
+          )}
+          
+          <button 
+            onClick={resetAppData}
+            className="text-[10px] sm:text-[11px] font-black uppercase tracking-wider text-[var(--swa-red)] hover:bg-[var(--swa-red)]/10 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl border border-[var(--swa-red)]/30 transition-colors flex items-center gap-1.5 cursor-pointer"
+            title="Factory Reset App Data"
+          >
+            <Trash2 size={12} />
+            <span className="hidden xs:inline">Reset</span> App
+          </button>
+        </div>
       </div>
     </div>
   );

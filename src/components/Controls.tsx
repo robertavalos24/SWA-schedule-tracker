@@ -36,24 +36,26 @@ export const Controls: React.FC<ControlsProps> = ({
   const isCurrentMonthLocked = isLocked || lockedMonths.includes(currentMonthKey);
 
   return (
-    <div className="flex flex-col gap-4 mb-6">
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] items-center gap-4 justify-center bg-[var(--card-bg)] p-3 rounded-2xl shadow-sm border border-[var(--border-color)]">
-        <div className="flex justify-center md:justify-start gap-2 flex-wrap">
+    <div className="flex flex-col gap-3 sm:gap-4 mb-4 sm:mb-6">
+      <div className="flex flex-col md:flex-row items-center justify-between gap-3 sm:gap-4 bg-[var(--card-bg)] p-3 sm:p-4 rounded-2xl shadow-sm border border-[var(--border-color)]">
+        {/* Left Actions */}
+        <div className="flex items-center justify-center sm:justify-start gap-2 flex-wrap w-full md:w-auto order-2 md:order-1">
           {!isYearView && (
             <>
               <button 
                 onClick={() => triggerClearMonth ? triggerClearMonth(viewYear, viewMonth) : openModal('confirmClearMonth')} 
                 disabled={isCurrentMonthLocked}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs transition-all ${isCurrentMonthLocked ? 'bg-gray-50 dark:bg-gray-800/50 text-gray-400 dark:text-gray-500 border-gray-200 dark:border-gray-700/50 cursor-not-allowed' : 'bg-[var(--swa-red)]/10 text-[var(--swa-red)] border border-[var(--swa-red)]/30 cursor-pointer hover:bg-[var(--swa-red)]/20 hover:border-[var(--swa-red)]/50'}`}
+                className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs transition-all active:scale-95 flex-1 sm:flex-initial ${isCurrentMonthLocked ? 'bg-gray-50 dark:bg-gray-800/50 text-gray-400 dark:text-gray-500 border-gray-200 dark:border-gray-700/50 cursor-not-allowed' : 'bg-[var(--swa-red)]/10 text-[var(--swa-red)] border border-[var(--swa-red)]/30 cursor-pointer hover:bg-[var(--swa-red)]/20'}`}
                 title={isCurrentMonthLocked ? "Locked" : "Clear all entries for this month"}
               >
-                <Trash2 size={14} /> Clear Month
+                <Trash2 size={13} />
+                <span>Clear</span>
               </button>
 
               {toggleLockMonth && (
                 <button 
                   onClick={() => toggleLockMonth(viewYear, viewMonth)} 
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                  className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs transition-all cursor-pointer active:scale-95 flex-1 sm:flex-initial ${
                     lockedMonths.includes(currentMonthKey)
                       ? 'bg-[var(--ra-gold)]/15 text-[var(--ra-gold)] border border-[var(--ra-gold)]/40 hover:bg-[var(--ra-gold)]/25'
                       : 'bg-[var(--text-muted)]/10 text-[var(--text-main)] border border-[var(--border-color)] hover:bg-[var(--hover-bg)]'
@@ -61,9 +63,9 @@ export const Controls: React.FC<ControlsProps> = ({
                   title="Lock or unlock this month to prevent accidental changes"
                 >
                   {lockedMonths.includes(currentMonthKey) ? (
-                    <>🔒 Locked</>
+                    <>🔒 <span className="hidden xs:inline">Locked</span></>
                   ) : (
-                    <>🔓 Lock Month</>
+                    <>🔓 <span className="hidden xs:inline">Lock</span></>
                   )}
                 </button>
               )}
@@ -73,98 +75,104 @@ export const Controls: React.FC<ControlsProps> = ({
           <button 
             onClick={undoLogs} 
             disabled={!canUndo || isCurrentMonthLocked}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs transition-all ${(canUndo && !isCurrentMonthLocked) ? 'bg-[var(--text-muted)]/10 text-[var(--text-main)] border border-[var(--text-muted)]/30 cursor-pointer hover:bg-[var(--text-muted)]/20 hover:border-[var(--text-muted)]/50' : 'bg-gray-50 dark:bg-gray-800/50 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-700/50 cursor-not-allowed'}`}
+            className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs transition-all active:scale-95 flex-1 sm:flex-initial ${(canUndo && !isCurrentMonthLocked) ? 'bg-[var(--text-muted)]/10 text-[var(--text-main)] border border-[var(--text-muted)]/30 cursor-pointer hover:bg-[var(--text-muted)]/20' : 'bg-gray-50 dark:bg-gray-800/50 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-700/50 cursor-not-allowed'}`}
             title={isCurrentMonthLocked ? "Locked" : "Undo last action"}
           >
-            <Undo2 size={14} /> Undo
+            <Undo2 size={13} />
+            <span>Undo</span>
           </button>
         </div>
         
-        <div className="flex items-center justify-center gap-1.5 bg-[var(--sub-bg)] p-1.5 rounded-xl border border-[var(--border-color)]">
-        <button 
-          onClick={() => moveYear(-1)} 
-          className="text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--hover-bg)] p-1.5 rounded-lg transition-colors"
-          title="Previous Year"
-        >
-          <ChevronsLeft size={18} />
-        </button>
-        
-        {!isYearView && (
+        {/* Center: Month/Year Navigator */}
+        <div className="flex items-center justify-center gap-1 sm:gap-2 bg-[var(--sub-bg)] p-1.5 sm:p-2 rounded-2xl border border-[var(--border-color)] w-full md:w-auto order-1 md:order-2">
           <button 
-            onClick={() => moveMonth(-1)} 
-            className="text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--hover-bg)] p-1.5 rounded-lg transition-colors"
-            title="Previous Month"
+            onClick={() => moveYear(-1)} 
+            className="text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--hover-bg)] p-2 rounded-xl transition-colors cursor-pointer active:scale-95"
+            title="Previous Year"
           >
-            <ChevronLeft size={18} />
+            <ChevronsLeft size={16} />
           </button>
-        )}
-        
-        {!isYearView ? (
-          <div className="mx-2 flex items-center justify-center px-2">
-            <div className="relative flex items-center">
-              <select 
-                className="border-none bg-transparent text-lg font-black text-[var(--text-main)] uppercase cursor-pointer outline-none text-center tracking-wider relative z-10 pr-6 appearance-none"
-                value={viewMonth}
-                onChange={(e) => setViewMonth(parseInt(e.target.value))}
-                style={{ WebkitAppearance: 'none', MozAppearance: 'none' }}
-              >
-                {months.map((m, i) => <option key={i} value={i}>{m}</option>)}
-              </select>
-              <div className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 text-[var(--text-main)] opacity-50 z-20">
-                <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+          
+          {!isYearView && (
+            <button 
+              onClick={() => moveMonth(-1)} 
+              className="text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--hover-bg)] p-2 rounded-xl transition-colors cursor-pointer active:scale-95"
+              title="Previous Month"
+            >
+              <ChevronLeft size={16} />
+            </button>
+          )}
+          
+          {!isYearView ? (
+            <div className="mx-1 sm:mx-3 flex items-center justify-center px-1 sm:px-2">
+              <div className="relative flex items-center">
+                <select 
+                  className="border-none bg-transparent text-base sm:text-lg font-black text-[var(--text-main)] uppercase cursor-pointer outline-none text-center tracking-wider relative z-10 pr-5 sm:pr-6 appearance-none"
+                  value={viewMonth}
+                  onChange={(e) => setViewMonth(parseInt(e.target.value))}
+                >
+                  {months.map((m, i) => <option key={i} value={i} className="bg-[var(--card-bg)] text-[var(--text-main)]">{m}</option>)}
+                </select>
+                <div className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-[var(--text-main)] opacity-50 z-20">
+                  <svg width="8" height="5" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
               </div>
+              <span className="text-base sm:text-lg font-black text-[var(--text-main)] ml-1 sm:ml-2 tracking-wider">{viewYear}</span>
             </div>
-            <span className="text-lg font-black text-[var(--text-main)] ml-1.5 tracking-wider">{viewYear}</span>
-          </div>
-        ) : (
-          <strong className="mx-4 text-[var(--text-main)] uppercase text-lg font-black tracking-wider block">
-            Annual {viewYear}
-          </strong>
-        )}
+          ) : (
+            <strong className="mx-3 sm:mx-6 text-[var(--text-main)] uppercase text-base sm:text-lg font-black tracking-wider block">
+              Annual {viewYear}
+            </strong>
+          )}
 
-        {!isYearView && (
+          {!isYearView && (
+            <button 
+              onClick={() => moveMonth(1)} 
+              className="text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--hover-bg)] p-2 rounded-xl transition-colors cursor-pointer active:scale-95"
+              title="Next Month"
+            >
+              <ChevronRight size={16} />
+            </button>
+          )}
+          
           <button 
-            onClick={() => moveMonth(1)} 
-            className="text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--hover-bg)] p-1.5 rounded-lg transition-colors"
-            title="Next Month"
+            onClick={() => moveYear(1)} 
+            className="text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--hover-bg)] p-2 rounded-xl transition-colors cursor-pointer active:scale-95"
+            title="Next Year"
           >
-            <ChevronRight size={18} />
+            <ChevronsRight size={16} />
           </button>
-        )}
+        </div>
         
-        <button 
-          onClick={() => moveYear(1)} 
-          className="text-[var(--text-muted)] hover:text-[var(--text-main)] hover:bg-[var(--hover-bg)] p-1.5 rounded-lg transition-colors"
-          title="Next Year"
-        >
-          <ChevronsRight size={18} />
-        </button>
+        {/* Right Actions */}
+        <div className="flex items-center justify-center sm:justify-end gap-2 flex-wrap w-full md:w-auto order-3">
+          <button 
+            onClick={exportICS} 
+            className="flex items-center justify-center gap-1.5 bg-[var(--pay-green)]/10 text-[var(--pay-green)] border border-[var(--pay-green)]/30 px-3 py-2 rounded-xl font-bold text-xs cursor-pointer transition-all hover:bg-[var(--pay-green)]/20 active:scale-95 flex-1 sm:flex-initial"
+            title="Export to ICS (Calendar Sync)"
+          >
+            <CalendarClock size={13} />
+            <span>Sync</span>
+          </button>
+          <button 
+            onClick={jumpToToday} 
+            className="flex items-center justify-center gap-1.5 bg-[var(--swa-orange)]/10 text-[var(--swa-orange)] border border-[var(--swa-orange)]/30 px-3 py-2 rounded-xl font-bold text-xs cursor-pointer transition-all hover:bg-[var(--swa-orange)]/20 active:scale-95 flex-1 sm:flex-initial"
+            title="Jump to Today"
+          >
+            <CalendarIcon size={13} />
+            <span>Today</span>
+          </button>
+          <button 
+            onClick={toggleView} 
+            className="flex items-center justify-center gap-1.5 bg-[var(--swa-blue)] text-white border border-[var(--swa-blue)]/50 px-3.5 sm:px-4 py-2 rounded-xl font-bold text-xs cursor-pointer transition-all hover:bg-[var(--swa-blue)]/90 active:scale-95 shadow-sm flex-1 sm:flex-initial"
+          >
+            <CalendarDays size={13} />
+            <span>{isYearView ? "Month" : "Year"}</span>
+          </button>
+        </div>
       </div>
-      
-      <div className="flex justify-center md:justify-end gap-2 flex-wrap">
-        <button 
-          onClick={exportICS} 
-          className="flex items-center gap-1.5 bg-[var(--pay-green)]/10 text-[var(--pay-green)] border border-[var(--pay-green)]/30 px-3 py-2 rounded-xl font-bold text-xs cursor-pointer transition-all hover:bg-[var(--pay-green)]/20"
-          title="Export to ICS (Calendar Sync)"
-        >
-          <CalendarClock size={14} /> Sync
-        </button>
-        <button 
-          onClick={jumpToToday} 
-          className="flex items-center gap-1.5 bg-[var(--swa-orange)]/10 text-[var(--swa-orange)] border border-[var(--swa-orange)]/30 px-3 py-2 rounded-xl font-bold text-xs cursor-pointer transition-all hover:bg-[var(--swa-orange)]/20 hover:border-[var(--swa-orange)]/50"
-        >
-          <CalendarIcon size={14} /> Today
-        </button>
-        <button 
-          onClick={toggleView} 
-          className="flex items-center gap-1.5 bg-[var(--swa-blue)] text-white border border-[var(--swa-blue)]/50 px-4 py-2 rounded-xl font-bold text-xs cursor-pointer transition-all hover:bg-[var(--swa-blue)]/80 shadow-md"
-        >
-          <CalendarDays size={14} /> {isYearView ? "Monthly View" : "Yearly View"}
-        </button>
-      </div>
-    </div>
     </div>
   );
 };

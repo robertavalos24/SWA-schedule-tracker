@@ -117,59 +117,59 @@ export const Dashboard: React.FC<DashboardProps> = ({
     <div className="flex flex-col gap-2.5 mb-4">
       {/* Reminders / Alerts Section */}
       {(fmlaWarnings.length > 0 || fmlaExpirationWarnings.length > 0 || overallFmlaRemaining < 40 || (attDays !== null && attDays <= 30) || (perfDays !== null && perfDays <= 30)) && (
-        <div className="bg-[var(--card-bg)] border border-[var(--border-color)] p-3 rounded-xl flex flex-col gap-2 shadow-sm mb-2">
+        <div className="bg-[var(--card-bg)] border border-[var(--border-color)] p-3 sm:p-4 rounded-2xl flex flex-col gap-2 shadow-sm mb-1 sm:mb-2">
           <div 
-            className="font-bold flex items-center justify-between text-[var(--text-main)] pb-2 uppercase tracking-tighter text-[11px] text-[var(--swa-blue)] cursor-pointer select-none"
+            className="font-bold flex items-center justify-between text-[var(--text-main)] pb-1 sm:pb-2 uppercase tracking-tight text-[11px] sm:text-xs text-[var(--swa-blue)] cursor-pointer select-none"
             onClick={() => setShowReminders(!showReminders)}
           >
-            <div className="flex items-center gap-2">
-              <Bell size={14} className="text-[var(--swa-orange)]" /> Upcoming Reminders & Notifications
+            <div className="flex items-center gap-2 font-black">
+              <Bell size={14} className="text-[var(--swa-orange)] animate-bounce" /> Upcoming Reminders & Alerts
             </div>
-            {showReminders ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {showReminders ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </div>
           
           {showReminders && (
-            <div className="flex flex-col gap-2 border-t border-[var(--border-color)] pt-2">
+            <div className="flex flex-col gap-2 border-t border-[var(--border-color)] pt-3">
               {overallFmlaRemaining < 40 && (
                 <div className="text-xs font-semibold text-[var(--swa-red)] flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-[var(--swa-red)]"></span>
+                  <span className="w-2 h-2 rounded-full bg-[var(--swa-red)] flex-shrink-0"></span>
                   Overall FMLA Balance — Only <span className="font-black">{overallFmlaRemaining.toFixed(1)} hours</span> remaining!
                 </div>
               )}
 
-          {fmlaWarnings.map(w => (
-            <div key={w.num} className="text-xs font-semibold text-[var(--swa-red)] flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[var(--swa-red)]"></span>
-              FMLA Case #{w.num} ({w.year}) — Only <span className="font-black">{w.remaining.toFixed(1)} hours</span> remaining!
-            </div>
-          ))}
+              {fmlaWarnings.map(w => (
+                <div key={w.num} className="text-xs font-semibold text-[var(--swa-red)] flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-[var(--swa-red)] flex-shrink-0"></span>
+                  FMLA Case #{w.num} ({w.year}) — Only <span className="font-black">{w.remaining.toFixed(1)} hours</span> remaining!
+                </div>
+              ))}
 
-          {fmlaExpirationWarnings.map(w => (
-            <div key={w.num} className="text-xs font-semibold text-[var(--swa-orange)] flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[var(--swa-orange)]"></span>
-              FMLA Case #{w.num} is expiring in <span className="font-black">{w.daysUntil} days</span> ({w.expDate})
-            </div>
-          ))}
+              {fmlaExpirationWarnings.map(w => (
+                <div key={w.num} className="text-xs font-semibold text-[var(--swa-orange)] flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-[var(--swa-orange)] flex-shrink-0"></span>
+                  FMLA Case #{w.num} is expiring in <span className="font-black">{w.daysUntil} days</span> ({w.expDate})
+                </div>
+              ))}
 
-          {attDays !== null && attDays <= 30 && attDays >= 0 && (
-            <div className="text-xs font-semibold text-[var(--swa-orange)] flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[var(--swa-orange)]"></span>
-              Attendance point dropping off in <span className="font-black">{attDays} days</span> ({stats.dropDateText})
-            </div>
-          )}
+              {attDays !== null && attDays <= 30 && attDays >= 0 && (
+                <div className="text-xs font-semibold text-[var(--swa-orange)] flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-[var(--swa-orange)] flex-shrink-0"></span>
+                  Attendance point dropping off in <span className="font-black">{attDays} days</span> ({stats.dropDateText})
+                </div>
+              )}
 
-          {perfDays !== null && perfDays <= 30 && perfDays >= 0 && (
-            <div className="text-xs font-semibold text-[var(--swa-orange)] flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[var(--swa-orange)]"></span>
-              Performance point dropping off in <span className="font-black">{perfDays} days</span> ({stats.manualDropDateText})
-            </div>
-          )}
+              {perfDays !== null && perfDays <= 30 && perfDays >= 0 && (
+                <div className="text-xs font-semibold text-[var(--swa-orange)] flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-[var(--swa-orange)] flex-shrink-0"></span>
+                  Performance point dropping off in <span className="font-black">{perfDays} days</span> ({stats.manualDropDateText})
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-2.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {(cardPrefs.cardOrder || ['timeoff', 'att', 'mid', 'pay']).map((cardId) => {
           if (cardId === 'timeoff' && (!isYearView && cardPrefs.timeoff)) {
             return (
