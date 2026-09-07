@@ -49,8 +49,8 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
   const handleShare = async () => {
     const url = window.location.href;
     const shareData = {
-      title: 'SWA Schedule & Attendance',
-      text: `Check out my SWA Schedule & Attendance app`,
+      title: 'LUVSchedule — SWA Schedule & Attendance',
+      text: `Check out my LUVSchedule SWA Attendance & Pay Tracker`,
       url: url,
     };
 
@@ -63,8 +63,8 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
         }
       }
     } else {
-      const subject = encodeURIComponent(`Check out my SWA Schedule & Attendance app`);
-      const body = encodeURIComponent(`Hey, check out this SWA Schedule & Attendance tracker I'm using: ${url}`);
+      const subject = encodeURIComponent(`Check out LUVSchedule — SWA Schedule & Attendance`);
+      const body = encodeURIComponent(`Hey, check out this LUVSchedule SWA Attendance & Pay tracker I'm using: ${url}`);
       window.location.href = `mailto:?subject=${subject}&body=${body}`;
     }
   };
@@ -90,10 +90,10 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
           </div>
           <div className="flex flex-col">
             <span className="font-extrabold text-sm sm:text-lg tracking-tight italic flex items-center gap-1.5">
-              SWA Schedule
+              LUVSchedule
               <span className="hidden xs:inline text-[10px] sm:text-xs font-semibold not-italic px-1.5 py-0.5 rounded-full bg-white/15 border border-white/25">2.0</span>
             </span>
-            <span className="text-[10px] sm:text-[11px] text-white/70 font-medium tracking-wide hidden sm:block">Attendance & Pay Portal</span>
+            <span className="text-[10px] sm:text-[11px] text-white/70 font-medium tracking-wide hidden sm:block">SWA Attendance & Pay Portal</span>
           </div>
         </div>
 

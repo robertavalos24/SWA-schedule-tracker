@@ -1,6 +1,6 @@
 {
-  "name": "Remix SWA Schedule Tracker 2.0",
-  "description": "SWA Schedule & Attendance Tracker with real-time calculations, Cloud sync, and pay auditing.",
+  "name": "LUVSchedule",
+  "description": "LUVSchedule: Southwest Airlines Schedule & Attendance Tracker with real-time calculations, Cloud sync, and pay auditing.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
