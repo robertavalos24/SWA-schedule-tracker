@@ -1527,20 +1527,21 @@ export const getRollingYearStats = (y: number, m: number, logs: LogsState, setti
           }
         } else if (e.type === 'PTO' || e.type === 'FMLA-P' || e.type === 'UNPTO' || e.type === 'MED-P-PTO') {
           if (e.type === 'UNPTO') {
+            isUnpto = true;
+            val = h + 'h';
             if (isAfterAsOf) {
               if (pto >= h) {
                 pto -= h;
-                isUnpto = true;
-                val = h + 'h';
               } else {
                 const remainingPto = Math.max(0, pto);
                 pto = 0;
-                isUu = true;
-                val = '1 inst (Auto)';
+                if (remainingPto === 0) {
+                  isUu = true;
+                  val = `${h}h (Unpaid)`;
+                } else {
+                  val = `${remainingPto}h paid / ${(h - remainingPto).toFixed(1)}h unp`;
+                }
               }
-            } else {
-              isUnpto = true;
-              val = h + 'h';
             }
           } else {
             if (isAfterAsOf) {
@@ -1572,8 +1573,16 @@ export const getRollingYearStats = (y: number, m: number, logs: LogsState, setti
 
         const logDate = new Date(ds + "T00:00:00");
         if (logDate >= startTarget && logDate <= endTarget) {
-          if (isUnpto) { unptoHrs += h; attHistory.push({date: ds, type: 'UNPTO', val}); }
-          if (isUu) { uuCount++; attHistory.push({date: ds, type: 'UNPAID-UNSCHED', val}); }
+          if (isUnpto) { 
+            unptoHrs += h; 
+            attHistory.push({date: ds, type: isUu ? 'UNPTO (UU)' : 'UNPTO', val}); 
+          }
+          if (isUu && !isUnpto) { 
+            uuCount++; 
+            attHistory.push({date: ds, type: 'UNPAID-UNSCHED', val}); 
+          } else if (isUu && isUnpto) {
+            uuCount++;
+          }
           if (isTardy) { tardyCount++; attHistory.push({date: ds, type: 'TARDY', val}); }
           if (isNs) { nsCount++; attHistory.push({date: ds, type: 'NO-SHOW', val}); }
         }

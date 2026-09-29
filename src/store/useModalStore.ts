@@ -36,6 +36,7 @@ export const useModalStore = create<ModalState>((set) => ({
     taxSettings: false,
     payHistory: false,
     confirmRestore: false,
+    cloudStatus: false,
   },
   openModal: (id) =>
     set((state) => ({

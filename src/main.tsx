@@ -4,13 +4,12 @@ import App from './App.tsx';
 import { ToastProvider } from './contexts/ToastContext.tsx';
 import { ErrorBoundary } from './ErrorBoundary.tsx';
 import './index.css';
+import { registerSW } from 'virtual:pwa-register';
 
-// Forcefully unregister any stuck service workers to prevent blank screens
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then(registrations => {
-    for (let r of registrations) {
-      r.unregister();
-    }
+// Register PWA service worker for offline caching and Home Screen execution
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  registerSW({
+    immediate: true,
   });
 }
 

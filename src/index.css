@@ -9,13 +9,13 @@
 
 @layer base {
   :root {
-    /* Light Theme Defaults - Refined */
-    --swa-blue: #304CB2;
+    /* Light Theme Defaults - Refined Modern Bento & Glassmorphism */
+    --swa-blue: #243C96;
     --swa-red: #FF1919;
     --swa-yellow: #FFBF27;
     --swa-orange: #FF8C00;
     --pay-green: #2E7D32;
-    --bg-grey: #F1F5F9;
+    --bg-grey: #F8FAFC;
     --ra-purple: #800080;
     --ra-red: #CC0000;
     --ra-light-green: #90EE90;
@@ -43,8 +43,8 @@
     --tooltip-text: #ffffff;
     --header-border: var(--swa-red);
     
-    --card-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-    --card-radius: 1rem;
+    --card-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05), 0 0 3px rgba(15, 23, 42, 0.02);
+    --card-radius: 1.25rem;
     
     /* Shift Colors */
     --sh-am: #4DB6AC;
@@ -80,7 +80,7 @@
     --tooltip-text: #0F172A;
     --ra-purple: #D8B4FE;
     --header-border: var(--swa-blue);
-    --card-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.5);
+    --card-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.5), 0 0 4px rgba(0, 0, 0, 0.3);
     --sh-mid: #C084FC;
     --sh-mid-text: #000000;
   }
@@ -108,6 +108,7 @@
     --tooltip-text: #082F49;
     --ra-purple: #C084FC;
     --header-border: #38BDF8;
+    --card-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.5), 0 0 4px rgba(0, 0, 0, 0.3);
   }
 
   [data-theme="sunset"] {
@@ -133,6 +134,7 @@
     --tooltip-text: #450A0A;
     --ra-purple: #E879F9;
     --header-border: #F43F5E;
+    --card-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.5), 0 0 4px rgba(0, 0, 0, 0.3);
   }
 
   [data-theme="forest"] {
@@ -158,6 +160,7 @@
     --tooltip-text: #022C22;
     --ra-purple: #D8B4FE;
     --header-border: #10B981;
+    --card-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.5), 0 0 4px rgba(0, 0, 0, 0.3);
   }
 
   body {
@@ -194,17 +197,17 @@
   }
 
   .action-btn {
-    @apply border border-[var(--border-color)] px-4 py-2 rounded-lg font-bold text-xs cursor-pointer transition-all text-center hover:bg-[var(--hover-bg)] active:scale-95 shadow-sm;
+    @apply border border-[var(--border-color)] px-4 py-2 rounded-xl font-bold text-xs cursor-pointer transition-all text-center hover:bg-[var(--hover-bg)] active:scale-95 shadow-sm;
     background-color: var(--card-bg);
     color: var(--text-main);
   }
 
   .modal {
-    @apply fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[1000] flex items-center justify-center p-4 overflow-y-auto;
+    @apply fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[1000] flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto;
   }
 
   .modal-box {
-    @apply w-full max-w-[440px] p-6 rounded-2xl border-t-[8px] border-[var(--swa-blue)] shadow-2xl;
+    @apply w-full max-w-[440px] p-5 sm:p-6 rounded-t-3xl sm:rounded-2xl border-t-[8px] border-[var(--swa-blue)] shadow-2xl max-h-[92vh] overflow-y-auto;
     background-color: var(--card-bg);
     color: var(--text-main);
   }
@@ -336,4 +339,3 @@
   opacity: 1;
   bottom: 135%;
 }
-

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Download, Upload, FileJson, FileSpreadsheet, Trash2, Info, Save, ShieldCheck, ShieldAlert,
   Lock, Unlock, Settings as SettingsIcon, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, 
-  RotateCcw, DollarSign, Clock, AlertCircle, CheckCircle2 
+  RotateCcw, DollarSign, Clock, AlertCircle, CheckCircle2,
+  LayoutDashboard, ChevronDown, ChevronUp 
 } from 'lucide-react';
 import { Header } from './components/Header';
 import { SettingsBar } from './components/SettingsBar';
@@ -22,6 +23,10 @@ import { useToast } from './contexts/ToastContext';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { useModalStore } from './store/useModalStore';
+import { MobileBottomNav } from './components/MobileBottomNav';
+import { QuickLogSpeedDial } from './components/QuickLogSpeedDial';
+import { PWAInstallPrompt } from './components/PWAInstallPrompt';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
 
 export default function App() {
   const {
@@ -57,11 +62,41 @@ export default function App() {
   const [backupHandle, setBackupHandle] = useState<any>(null);
   const { showToast } = useToast();
 
+  const [isMobileOverviewCollapsed, setIsMobileOverviewCollapsed] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('swa_mobileOverviewCollapsed');
+      return stored === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleMobileOverview = () => {
+    setIsMobileOverviewCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('swa_mobileOverviewCollapsed', String(next));
+      } catch {}
+      return next;
+    });
+  };
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
   const lastViewedYearRef = useRef(viewYear);
 
   const [isMobile, setIsMobile] = useState(false);
+  const [mobileCalendarView, setMobileCalendarView] = useState<'grid' | 'list'>(() => {
+    try {
+      return (localStorage.getItem('swa_mobile_calendar_view') as 'grid' | 'list') || 'grid';
+    } catch (e) {
+      return 'grid';
+    }
+  });
+
+  const [isQuickLogOpen, setIsQuickLogOpen] = useState(false);
+  const [quickLogTargetDate, setQuickLogTargetDate] = useState<string>('');
+  const isOnline = useOnlineStatus();
 
   useEffect(() => {
     const handleOffline = () => {
@@ -450,6 +485,75 @@ export default function App() {
     }
   };
 
+  const handleQuickShiftSave = (type: string, hrs: string = '8', extraOptions: any = {}, targetDate?: string) => {
+    const dStr = targetDate || activeDate || (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })();
+    setActiveDate(dStr);
+
+    const d = new Date(dStr + "T00:00:00");
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    if (isLocked || lockedMonths.includes(key)) {
+      showToast("This month is locked. Please unlock it to modify entries.", "error");
+      return;
+    }
+
+    const newLogs = { ...logs };
+    if (!newLogs[dStr] || !Array.isArray(newLogs[dStr])) newLogs[dStr] = [];
+    
+    const h = parseFloat(hrs) || 8;
+    const dayEntries = [...(newLogs[dStr] || [])];
+    
+    const isWorkShift = (t: string) => t === 'WORK' || t.startsWith('WORK-');
+    if (isWorkShift(type)) {
+      const hasOffDay = dayEntries.some(e => {
+        const t = e.type;
+        return t === 'PTO' || t === 'WOP' || t === 'HOL' || t === 'UNPTO' || 
+               t === 'FMLA-P' || t === 'FML-UNP' || t === 'MED-P-PTO' || 
+               t === 'MED-UNP' || t === 'MED-LV';
+      });
+      const isAlreadyAdded = dayEntries.some(e => e.type === type && e.hrs === h && (e.label || '') === (extraOptions?.label || ''));
+      if (!hasOffDay && isAlreadyAdded) {
+        showToast(`You can only work the same shift hours once in a single day.`, 'error');
+        return;
+      }
+    }
+
+    const entry: any = { type, hrs: h, otRule: 'std', ...extraOptions };
+    const { entries, warning } = processEntryWithBalances(
+      entry,
+      dStr,
+      newLogs,
+      dayEntries,
+      settings,
+      fmlaCases
+    );
+
+    newLogs[dStr] = [...dayEntries, ...entries];
+    updateLogs(newLogs);
+    showToast(`Logged ${type.replace('WORK-', '')} (${h}h) on ${dStr}`, 'success');
+    
+    if (warning) {
+      setPtoWarningMessage(warning);
+      openModal('ptoWarning');
+    }
+  };
+
+  const jumpToToday = () => {
+    const today = new Date();
+    setViewMonth(today.getMonth());
+    setViewYear(today.getFullYear());
+    setIsYearView(false);
+    const todayDs = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    setTimeout(() => {
+      const el = document.getElementById(`day-item-${todayDs}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 150);
+  };
+
   const saveEditBlock = (entry: any) => {
     if (editDate && editIndex !== null) {
       const d = new Date(editDate + "T00:00:00");
@@ -634,13 +738,6 @@ export default function App() {
 
     newLogs[ds] = dayEntries;
     updateLogs(newLogs);
-  };
-
-  const jumpToToday = () => {
-    const td = new Date();
-    setViewMonth(td.getMonth());
-    setViewYear(td.getFullYear());
-    setIsYearView(false);
   };
 
   const moveMonth = (n: number) => {
@@ -1426,26 +1523,63 @@ export default function App() {
             .catch((e: Error) => showToast('Failed to backup: ' + e.message, 'error'));
         }}
         forceSyncToCloud={async () => {
-          showToast('Pushing local data to Firebase cloud...', 'info');
-          const success = await forceSyncToCloud();
-          if (success) {
-            showToast('Data pushed to cloud successfully!', 'success');
-          } else {
-            showToast('Failed to push data to cloud.', 'error');
+          if (!user) {
+            showToast('Signing in to enable cloud sync...', 'info');
+            try {
+              await login();
+            } catch (loginErr: any) {
+              const msg = loginErr?.message || '';
+              if (msg.includes('unauthorized-domain')) {
+                showToast('Domain not authorized in Firebase Console. Add ' + window.location.hostname + ' to Authorized Domains.', 'error');
+              } else if (msg.includes('popup-blocked')) {
+                showToast('Safari blocked the sign-in popup. Please allow popups for this site.', 'warning');
+              } else {
+                showToast('Sign-in required: ' + (loginErr?.message || 'Sign in cancelled'), 'warning');
+              }
+              return;
+            }
+          }
+          showToast('Pushing local data to Cloud...', 'info');
+          try {
+            const success = await forceSyncToCloud();
+            if (success) {
+              showToast('Data pushed to cloud successfully!', 'success');
+            } else {
+              showToast('Failed to push data to cloud. Check network connection.', 'error');
+            }
+          } catch (e: any) {
+            console.warn('Push to cloud failed:', e);
+            showToast('Cloud push error: ' + (e?.message || 'Unknown error'), 'error');
           }
         }}
         pullFromCloud={async () => {
+          if (!user) {
+            showToast('Signing in to enable cloud sync...', 'info');
+            try {
+              await login();
+            } catch (loginErr: any) {
+              const msg = loginErr?.message || '';
+              if (msg.includes('unauthorized-domain')) {
+                showToast('Domain not authorized in Firebase Console. Add ' + window.location.hostname + ' to Authorized Domains.', 'error');
+              } else if (msg.includes('popup-blocked')) {
+                showToast('Safari blocked the sign-in popup. Please allow popups for this site.', 'warning');
+              } else {
+                showToast('Sign-in required: ' + (loginErr?.message || 'Sign in cancelled'), 'warning');
+              }
+              return;
+            }
+          }
           showToast('Pulling data from cloud...', 'info');
           try {
             const success = await pullFromCloud();
             if (success) {
-              showToast('Data successfully pulled and updated!', 'success');
+              showToast('Schedule data successfully pulled from cloud!', 'success');
             } else {
-              showToast('No cloud data found.', 'warning');
+              showToast('No cloud data found yet. Click "Push" to back up your local schedule to the cloud.', 'info');
             }
           } catch (e: any) {
             console.warn('Pull from cloud failed:', e);
-            showToast('Unable to pull cloud data. The network is offline or unavailable.', 'error');
+            showToast('Unable to pull cloud data: ' + (e?.message || 'Check network / permissions'), 'error');
           }
         }}
       />
@@ -1454,34 +1588,58 @@ export default function App() {
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className="max-w-[1600px] w-full mx-auto my-2 sm:my-4 px-3 sm:px-6 lg:px-8 pb-12 box-border"
+        className="max-w-[1600px] w-full mx-auto my-2 sm:my-4 px-2.5 sm:px-6 lg:px-8 pb-24 md:pb-12 box-border"
       >
-        <SettingsBar 
-          settings={settings} 
-          updateSettings={updateSettings} 
-          baseSalary={getYearBaseSalary()}
-          calculatedSalary={calculatedSalary()}
-          endOfYearSalary={endOfYearSalary()}
-          hourlyRate={hourlyRate()}
-          fmlaCases={fmlaCases}
-          logs={logs}
-          viewYear={viewYear}
-          effectiveLevel={effectiveLevel()}
-          resetAppData={resetAppData}
-        />
+        {/* Mobile PWA Install Banner */}
+        <PWAInstallPrompt variant="banner" />
 
-        {stats && (
-          <Dashboard 
-            cardPrefs={cardPrefs} 
-            updateCardPrefs={updateCardPrefs}
-            stats={stats} 
-            isYearView={isYearView}
+        {/* Single Mobile Overview Toggle */}
+        <div className="sm:hidden mb-2.5">
+          <button
+            type="button"
+            onClick={toggleMobileOverview}
+            className="w-full py-2.5 px-3.5 rounded-2xl bg-[var(--card-bg)] border border-[var(--border-color)] text-xs font-black text-[var(--swa-blue)] flex items-center justify-between shadow-xs active:scale-[0.98] transition hover:bg-[var(--hover-bg)]"
+          >
+            <span className="flex items-center gap-2">
+              <LayoutDashboard size={15} className="text-[var(--swa-blue)]" />
+              <span>{isMobileOverviewCollapsed ? 'Show Overview (Settings & Stats)' : 'Collapse Overview (Focus on Calendar)'}</span>
+            </span>
+            <span className="flex items-center gap-1 text-[11px] text-[var(--text-muted)] font-bold">
+              <span>{isMobileOverviewCollapsed ? 'Expand' : 'Collapse'}</span>
+              {isMobileOverviewCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+            </span>
+          </button>
+        </div>
+
+        {/* Collapsible Overview on Mobile */}
+        <div className={isMobileOverviewCollapsed ? 'hidden sm:block' : 'block'}>
+          <SettingsBar 
+            settings={settings} 
+            updateSettings={updateSettings} 
+            baseSalary={getYearBaseSalary()}
+            calculatedSalary={calculatedSalary()}
+            endOfYearSalary={endOfYearSalary()}
+            hourlyRate={hourlyRate()}
             fmlaCases={fmlaCases}
             logs={logs}
-            isLocked={isLocked}
             viewYear={viewYear}
+            effectiveLevel={effectiveLevel()}
+            resetAppData={resetAppData}
           />
-        )}
+
+          {stats && (
+            <Dashboard 
+              cardPrefs={cardPrefs} 
+              updateCardPrefs={updateCardPrefs}
+              stats={stats} 
+              isYearView={isYearView}
+              fmlaCases={fmlaCases}
+              logs={logs}
+              isLocked={isLocked}
+              viewYear={viewYear}
+            />
+          )}
+        </div>
 
         <Controls 
           viewMonth={viewMonth}
@@ -1490,7 +1648,7 @@ export default function App() {
           moveMonth={changeMonth}
           moveYear={changeYear}
           setViewMonth={setViewMonth}
-          jumpToToday={() => { setViewMonth(new Date().getMonth()); setViewYear(new Date().getFullYear()); setIsYearView(false); }}
+          jumpToToday={jumpToToday}
           toggleView={() => setIsYearView(!isYearView)}
           undoLogs={undoLogs}
           canUndo={logsHistory.length > 0}
@@ -1504,6 +1662,8 @@ export default function App() {
 
         <Calendar 
           isMobile={isMobile}
+          mobileCalendarView={mobileCalendarView}
+          setMobileCalendarView={setMobileCalendarView}
           viewMonth={viewMonth}
           viewYear={viewYear}
           isYearView={isYearView}
@@ -1597,7 +1757,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.95 }}
             transition={{ type: "spring", stiffness: 350, damping: 25 }}
-            className="fixed bottom-6 left-6 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:bg-emerald-950/40 dark:border-emerald-800/60 dark:text-emerald-400 px-4 py-2.5 rounded-full flex items-center gap-2 text-xs font-black uppercase tracking-wider shadow-lg backdrop-blur-sm z-[999] pointer-events-none"
+            className="fixed bottom-20 sm:bottom-6 left-4 sm:left-6 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:bg-emerald-950/40 dark:border-emerald-800/60 dark:text-emerald-400 px-4 py-2.5 rounded-full flex items-center gap-2 text-xs font-black uppercase tracking-wider shadow-lg backdrop-blur-sm z-[999] pointer-events-none"
           >
             <CheckCircle2 size={16} className="text-emerald-500 dark:text-emerald-400" />
             <span>Changes Saved</span>
@@ -1610,10 +1770,46 @@ export default function App() {
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.9 }}
         onClick={() => setIsLocked(!isLocked)}
-        className={`fixed bottom-6 right-6 w-14 h-14 rounded-full flex items-center justify-center shadow-2xl z-[999] transition-all lock-toggle ${isLocked ? 'bg-[var(--swa-red)] text-white' : 'bg-[var(--swa-blue)] text-white'}`}
+        className={`fixed bottom-[max(5.25rem,calc(env(safe-area-inset-bottom)+4.25rem))] sm:bottom-6 right-4 sm:right-6 w-12 sm:w-14 h-12 sm:h-14 rounded-full flex items-center justify-center shadow-2xl z-[90] transition-all lock-toggle ${isLocked ? 'bg-[var(--swa-red)] text-white' : 'bg-[var(--swa-blue)] text-white'}`}
+        title={isLocked ? "Calendar is Locked" : "Calendar is Unlocked"}
       >
-        {isLocked ? <Lock size={24} /> : <Unlock size={24} />}
+        {isLocked ? <Lock size={20} className="sm:w-6 sm:h-6" /> : <Unlock size={20} className="sm:w-6 sm:h-6" />}
       </motion.button>
+
+      {/* Mobile Bottom Navigation Bar */}
+      <MobileBottomNav 
+        currentView={mobileCalendarView}
+        onToggleCalendarView={() => setMobileCalendarView(prev => prev === 'grid' ? 'list' : 'grid')}
+        onJumpToToday={jumpToToday}
+        onOpenQuickLog={() => {
+          setQuickLogTargetDate('');
+          setIsQuickLogOpen(true);
+        }}
+        onOpenSettings={() => openModal('settings')}
+        onOpenGuide={() => openModal('userGuide')}
+        stats={stats}
+        theme={theme}
+        toggleTheme={toggleTheme}
+        user={user}
+        login={login}
+        logout={logout}
+        forceSyncToCloud={forceSyncToCloud}
+        pullFromCloud={pullFromCloud}
+        onOpenModal={openModal}
+      />
+
+      {/* Quick Log Shift Speed Dial Modal */}
+      <QuickLogSpeedDial 
+        isOpen={isQuickLogOpen}
+        onClose={() => setIsQuickLogOpen(false)}
+        onSaveShift={handleQuickShiftSave}
+        onOpenFullModal={(dateStr) => {
+          setActiveDate(dateStr);
+          openModal('addBlock');
+        }}
+        defaultDate={quickLogTargetDate || activeDate}
+        isLocked={isLocked}
+      />
 
       {/* Confirm Reset Modal */}
       {modalsState.confirmReset && (
@@ -1703,6 +1899,12 @@ export default function App() {
       )}
 
       <Modals 
+        user={user}
+        login={login}
+        logout={logout}
+        forceSyncToCloud={forceSyncToCloud}
+        pullFromCloud={pullFromCloud}
+        handleBackup={handleBackup}
         activeDate={activeDate}
         editDate={editDate}
         editIndex={editIndex}

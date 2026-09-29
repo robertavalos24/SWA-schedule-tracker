@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { LogEntry, Settings, CardPrefs, FmlaCase, LogsState, MidCountsState, ThemeType } from '../types';
 import { autoAssignWorkedHolidays } from '../utils/calculations';
-import { useFirebaseSync } from './useFirebaseSync';
+import { useFirebaseSync, directRestPull } from './useFirebaseSync';
 import { doc, onSnapshot, getDoc, getDocFromCache } from 'firebase/firestore';
 
 const LOGS_KEY = 'swa_logs_main';
@@ -102,8 +102,10 @@ export const useScheduleData = () => {
   useEffect(() => {
     if (!user) return;
     
-    const docRef = doc(db, 'users', user.uid);
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+    let isSubscribed = true;
+    let unsubscribe: (() => void) | null = null;
+
+    const handleDocSnapshot = (docSnap: any) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
 
@@ -140,11 +142,48 @@ export const useScheduleData = () => {
           localStorage.setItem('swa_lockedMonths', JSON.stringify(data.lockedMonths));
         }
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
-    });
+    };
 
-    return () => unsubscribe();
+    const startSnapshotListener = async () => {
+      try {
+        // Wait for Firebase Auth token to be ready and attached to SDK state
+        await user.getIdToken(false);
+      } catch (tokenErr) {
+        console.warn('Initial token verification warning:', tokenErr);
+      }
+
+      if (!isSubscribed) return;
+
+      const docRef = doc(db, 'users', user.uid);
+      unsubscribe = onSnapshot(docRef, handleDocSnapshot, async (error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        const isPerm = msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient');
+        
+        if (isPerm) {
+          // Attempt a one-time token refresh in case the initial token was stale or attaching
+          try {
+            await user.getIdToken(true);
+            if (isSubscribed) {
+              if (unsubscribe) unsubscribe();
+              unsubscribe = onSnapshot(docRef, handleDocSnapshot, (retryError) => {
+                handleFirestoreError(retryError, OperationType.GET, `users/${user.uid}`);
+              });
+              return;
+            }
+          } catch (refreshErr) {
+            // Token refresh failed, continue to standard error handler
+          }
+        }
+        handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+      });
+    };
+
+    startSnapshotListener();
+
+    return () => {
+      isSubscribed = false;
+      if (unsubscribe) unsubscribe();
+    };
   }, [user, db]);
 
   // Load from local storage initially
@@ -366,16 +405,37 @@ export const useScheduleData = () => {
             console.warn('Pull from cloud: offline and document not present in local cache.');
             return false;
           }
+        } else if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient') || getErr?.code === 'permission-denied') {
+          try {
+            await user.getIdToken(true);
+            docSnap = await getDoc(docRef);
+          } catch (retryErr) {
+            throw retryErr;
+          }
         } else {
           throw getErr;
         }
       }
 
+      if (!docSnap || !docSnap.exists()) {
+        // Attempt retrieval via direct Cloud REST API fallback
+        try {
+          const restData = await directRestPull(user);
+          if (restData) {
+            docSnap = { exists: () => true, data: () => restData } as any;
+          }
+        } catch (restErr) {
+          console.warn('Direct REST pull fallback note:', restErr);
+        }
+      }
+
       if (docSnap && docSnap.exists()) {
         const data = docSnap.data();
-        if (data.logs) {
+        let loaded = false;
+        if (data.logs && Object.keys(data.logs).length > 0) {
           setLogs(data.logs);
           localStorage.setItem(LOGS_KEY, JSON.stringify(data.logs));
+          loaded = true;
         }
         if (data.midCounts) {
           setMidCounts(data.midCounts);
@@ -395,14 +455,17 @@ export const useScheduleData = () => {
             const val = data.settings[key];
             localStorage.setItem('swa_' + key, typeof val === 'object' ? JSON.stringify(val) : String(val));
           });
+          loaded = true;
         }
         if (data.lockedMonths) {
           setLockedMonths(data.lockedMonths);
           localStorage.setItem('swa_lockedMonths', JSON.stringify(data.lockedMonths));
         }
-        return true;
+        return loaded;
+      } else {
+        // No document exists in the cloud yet
+        return false;
       }
-      return false;
     } catch (e: any) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.toLowerCase().includes('offline') || msg.toLowerCase().includes('unavailable') || e?.code === 'unavailable') {
@@ -412,12 +475,12 @@ export const useScheduleData = () => {
       }
       return false;
     }
-  }, [user, db]);
+  }, [user, db, logs, midCounts, fmlaCases, cardPrefs, settings, lockedMonths, syncToFirebase]);
 
   const forceSyncToCloud = useCallback(async () => {
     if (!user) return false;
     try {
-      await syncToFirebase({
+      const success = await syncToFirebase({
         logs,
         midCounts,
         fmlaCases,
@@ -425,11 +488,14 @@ export const useScheduleData = () => {
         settings,
         lockedMonths
       });
-      triggerSavedIndicator();
-      return true;
+      if (success) {
+        triggerSavedIndicator();
+        return true;
+      }
+      return false;
     } catch (e) {
       console.warn('Force sync to cloud failed:', e);
-      return false;
+      throw e;
     }
   }, [user, logs, midCounts, fmlaCases, cardPrefs, settings, lockedMonths, syncToFirebase, triggerSavedIndicator]);
 

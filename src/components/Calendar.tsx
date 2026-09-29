@@ -1,9 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { LogEntry, LogsState, FmlaCase } from '../types';
 import { 
   FileText, Briefcase, Sun, Moon, Plane, Gift, 
   AlertTriangle, Activity, Clock, Coins, Sunset,
-  Lock, Unlock, Trash2
+  Lock, Unlock, Trash2, LayoutGrid, ListFilter
 } from 'lucide-react';
 import { getBlockLabel, getBlockTooltip, getBlockClass, getBlockStartHour, calculatePay, calculate, getOtDtSplit, formatPto } from '../utils/calculations';
 import { swaHolidays } from '../utils/constants';
@@ -14,6 +14,8 @@ interface CalendarProps {
   viewYear: number;
   isYearView: boolean;
   isMobile?: boolean;
+  mobileCalendarView?: 'grid' | 'list';
+  setMobileCalendarView?: (view: 'grid' | 'list') => void;
   direction: number;
   changeMonth: (n: number) => void;
   logs: LogsState;
@@ -58,10 +60,26 @@ const getAdditionalTagStyle = (tCls: string): React.CSSProperties => {
 };
 
 export const Calendar: React.FC<CalendarProps> = ({
-  viewMonth, viewYear, isYearView, isMobile, direction, changeMonth, logs, fmlaCases, hireDate, midCounts, settings,
+  viewMonth, viewYear, isYearView, isMobile, mobileCalendarView, setMobileCalendarView,
+  direction, changeMonth, logs, fmlaCases, hireDate, midCounts, settings,
   openModal, openEditBlock, removeEntry, showPaycheckAudit, setViewMonth, setIsYearView, isLocked,
   lockedMonths = [], toggleLockMonth, triggerClearMonth
 }) => {
+  const [internalMobileView, setInternalMobileView] = useState<'grid' | 'list'>(() => {
+    try {
+      return (localStorage.getItem('swa_mobile_calendar_view') as 'grid' | 'list') || 'grid';
+    } catch (e) {
+      return 'grid';
+    }
+  });
+
+  const activeMobileView = mobileCalendarView || internalMobileView;
+  const updateMobileView = (v: 'grid' | 'list') => {
+    if (setMobileCalendarView) setMobileCalendarView(v);
+    setInternalMobileView(v);
+    try { localStorage.setItem('swa_mobile_calendar_view', v); } catch (e) {}
+  };
+
   const hireMD = hireDate ? hireDate.substring(5) : null;
   const today = new Date();
 
@@ -445,12 +463,45 @@ export const Calendar: React.FC<CalendarProps> = ({
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
   const firstDay = new Date(viewYear, viewMonth, 1).getDay();
 
-  if (isMobile && !isYearView) {
+  if (!isYearView && activeMobileView === 'list') {
     return (
       <div className="bg-transparent shadow-none border-none overflow-hidden pb-6">
+        {/* Calendar View Toggle: Month Grid vs Agenda List */}
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <div className="flex items-center p-1 bg-[var(--card-bg)] rounded-xl border border-[var(--border-color)] shadow-xs">
+            <button
+              type="button"
+              onClick={() => updateMobileView('grid')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                (activeMobileView as string) === 'grid'
+                  ? 'bg-[var(--swa-blue)] text-white shadow-sm'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+              }`}
+            >
+              <LayoutGrid size={13} />
+              <span>Month Grid</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => updateMobileView('list')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                (activeMobileView as string) === 'list'
+                  ? 'bg-[var(--swa-blue)] text-white shadow-sm'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+              }`}
+            >
+              <ListFilter size={13} />
+              <span>Agenda List</span>
+            </button>
+          </div>
+          <div className="text-[11px] font-bold text-[var(--text-muted)] hidden sm:block">
+            Chronological Agenda View
+          </div>
+        </div>
+
         <AnimatePresence mode="wait" custom={direction}>
           <motion.div 
-            key={`${viewYear}-${viewMonth}-mobile`}
+            key={`${viewYear}-${viewMonth}-mobile-list`}
             custom={direction}
             variants={variants}
             initial="enter"
@@ -468,7 +519,7 @@ export const Calendar: React.FC<CalendarProps> = ({
                 changeMonth(-1);
               }
             }}
-            className="flex flex-col"
+            className="flex flex-col bg-[var(--card-bg)] rounded-2xl border border-[var(--border-color)] overflow-hidden shadow-sm"
           >
             {Array.from({ length: daysInMonth }).map((_, dIdx) => {
               const d = dIdx + 1;
@@ -478,7 +529,7 @@ export const Calendar: React.FC<CalendarProps> = ({
               const dayOfWeek = new Date(viewYear, viewMonth, d).toLocaleDateString('en-US', { weekday: 'short' });
               const fallOffs = fallOffDates[ds];
               
-              let dElCls = 'flex flex-row items-center py-2 px-3 border-b border-[var(--border-color)] cursor-pointer transition-colors gap-2';
+              let dElCls = 'flex flex-row items-center py-2.5 px-3 border-b border-[var(--border-color)] cursor-pointer transition-colors gap-2 min-h-[52px]';
               
               if (swaHolidays[ds]) dElCls += ' !bg-[var(--hol-bg)]';
               if (isToday) dElCls += ' !bg-[var(--swa-blue)]/10 ring-2 ring-inset ring-[var(--swa-blue)] z-10';
@@ -494,7 +545,7 @@ export const Calendar: React.FC<CalendarProps> = ({
                 dayLogs.sort((a,b) => getBlockStartHour(a) - getBlockStartHour(b));
                 
                 valHtml = (
-                  <div className="flex flex-col gap-1">
+                  <div className="flex flex-wrap gap-1 items-center">
                     {dayLogs.map(e => {
                       if(!e.type) return null;
                       const fullLabel = getBlockLabel(e, logs[ds], false, settings, logs, ds);
@@ -503,7 +554,7 @@ export const Calendar: React.FC<CalendarProps> = ({
                       return (
                         <div 
                           key={e._origIdx} 
-                          className={`tag-${tCls} px-1.5 py-0.5 rounded text-[10px] font-bold inline-block w-max shadow-sm flex items-center gap-1 cursor-pointer hover:brightness-110 active:scale-95 transition-all`}
+                          className={`tag-${tCls} px-2 py-1 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 shadow-sm cursor-pointer hover:brightness-110 active:scale-95 transition-all`}
                           style={getAdditionalTagStyle(tCls)}
                           onClick={(ev) => { 
                             if (isCurrentMonthLocked) return;
@@ -511,8 +562,8 @@ export const Calendar: React.FC<CalendarProps> = ({
                             openEditBlock(ds, e._origIdx); 
                           }}
                         >
-                          {getBlockIcon(tCls, 10)}
-                          {fullLabel}
+                          {getBlockIcon(tCls, 11)}
+                          <span>{fullLabel}</span>
                           {e.note && <FileText size={10} className="shrink-0 opacity-80" />}
                         </div>
                       );
@@ -553,11 +604,16 @@ export const Calendar: React.FC<CalendarProps> = ({
               }
 
               return (
-                <div key={d} className={dElCls} onClick={() => { if (!isCurrentMonthLocked) openModal(ds); }}>
+                <div 
+                  key={d} 
+                  id={`day-item-${ds}`} 
+                  className={dElCls} 
+                  onClick={() => { if (!isCurrentMonthLocked) openModal(ds); }}
+                >
                   {/* Left Column: Date */}
-                  <div className={`w-10 shrink-0 flex flex-col items-center justify-center ${isToday ? 'text-[var(--swa-blue)]' : 'text-[var(--text-muted)]'}`}>
-                    <span className="text-[9px] uppercase font-bold">{dayOfWeek}</span>
-                    <span className={`text-lg font-black leading-none ${isToday ? 'text-[var(--swa-blue)]' : 'text-[var(--text-main)]'}`}>{d}</span>
+                  <div className={`w-11 shrink-0 flex flex-col items-center justify-center ${isToday ? 'text-[var(--swa-blue)]' : 'text-[var(--text-muted)]'}`}>
+                    <span className="text-[10px] uppercase font-bold">{dayOfWeek}</span>
+                    <span className={`text-xl font-black leading-none ${isToday ? 'text-[var(--swa-blue)]' : 'text-[var(--text-main)]'}`}>{d}</span>
                   </div>
                   
                   {/* Middle Column: Events */}
@@ -569,7 +625,9 @@ export const Calendar: React.FC<CalendarProps> = ({
                         ⚠️ {fallOffs.length > 1 ? `${fallOffs.length} Fall Offs` : fallOffs[0]}
                       </div>
                     )}
-                    {valHtml}
+                    {valHtml || (
+                      <span className="text-[11px] text-[var(--text-muted)]/50 italic font-medium">Tap to log shift</span>
+                    )}
                   </div>
 
                   {/* Right Column: Pay Marker */}
@@ -588,16 +646,52 @@ export const Calendar: React.FC<CalendarProps> = ({
   }
 
   return (
-    <div className="bg-transparent shadow-none border-none overflow-hidden">
-      <div className="grid grid-cols-7 bg-transparent mb-2">
-        {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
-          <div key={d} className="text-center font-black text-[var(--text-muted)] uppercase text-xs py-2 tracking-wider">{d}</div>
+    <div className="bg-transparent shadow-none border-none overflow-hidden pb-6">
+      {/* Calendar View Toggle: Month Grid vs Agenda List */}
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="flex items-center p-1 bg-[var(--card-bg)] rounded-xl border border-[var(--border-color)] shadow-xs">
+          <button
+            type="button"
+            onClick={() => updateMobileView('grid')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+              activeMobileView === 'grid'
+                ? 'bg-[var(--swa-blue)] text-white shadow-sm'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+            }`}
+          >
+            <LayoutGrid size={13} />
+            <span>Month Grid</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => updateMobileView('list')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+              activeMobileView === 'list'
+                ? 'bg-[var(--swa-blue)] text-white shadow-sm'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+            }`}
+          >
+            <ListFilter size={13} />
+            <span>Agenda List</span>
+          </button>
+        </div>
+        <div className="text-[11px] font-bold text-[var(--text-muted)] hidden sm:block">
+          Calendar Grid View
+        </div>
+      </div>
+
+      <div className="grid grid-cols-7 bg-transparent mb-1.5">
+        {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, idx) => (
+          <div key={d} className="text-center font-black text-[var(--text-muted)] uppercase text-[10px] sm:text-xs py-1.5 tracking-wider">
+            <span className="sm:hidden">{['S','M','T','W','T','F','S'][idx]}</span>
+            <span className="hidden sm:inline">{d}</span>
+          </div>
         ))}
       </div>
       
       <AnimatePresence mode="wait" custom={direction}>
         <motion.div 
-          key={`${viewYear}-${viewMonth}`}
+          key={`${viewYear}-${viewMonth}-grid`}
           custom={direction}
           variants={variants}
           initial="enter"
@@ -615,10 +709,10 @@ export const Calendar: React.FC<CalendarProps> = ({
               changeMonth(-1);
             }
           }}
-          className="grid grid-cols-7 auto-rows-[minmax(130px,auto)] gap-[1px] bg-[var(--border-color)] rounded-2xl shadow-sm border border-[var(--border-color)]"
+          className="grid grid-cols-7 auto-rows-[minmax(60px,auto)] sm:auto-rows-[minmax(130px,auto)] gap-[1px] bg-[var(--border-color)] rounded-2xl shadow-sm border border-[var(--border-color)] overflow-hidden"
         >
           {Array.from({ length: firstDay }).map((_, idx) => {
-            return <div key={`empty-${idx}`} className="bg-[var(--sub-bg)] h-full p-2 relative flex flex-col items-center text-center box-border min-w-0"></div>;
+            return <div key={`empty-${idx}`} className="bg-[var(--sub-bg)] h-full p-1 sm:p-2 relative flex flex-col items-center text-center box-border min-w-0"></div>;
           })}
           
           {Array.from({ length: daysInMonth }).map((_, dIdx) => {
@@ -632,7 +726,7 @@ export const Calendar: React.FC<CalendarProps> = ({
             const lastCellIndex = totalCells - 1;
             const firstCellOfLastRow = Math.floor(lastCellIndex / 7) * 7;
 
-            let dElCls = 'bg-[var(--card-bg)] h-full p-2 relative cursor-pointer flex flex-col items-center text-center box-border min-w-0 hover:bg-[var(--hover-bg)] transition-colors';
+            let dElCls = 'bg-[var(--card-bg)] h-full p-1 sm:p-2 relative cursor-pointer flex flex-col items-center text-center box-border min-w-0 hover:bg-[var(--hover-bg)] transition-colors';
 
             const fallOffs = fallOffDates[ds];
             if (fallOffs && fallOffs.length > 0) {
@@ -649,10 +743,34 @@ export const Calendar: React.FC<CalendarProps> = ({
               dayLogs.sort((a,b) => getBlockStartHour(a) - getBlockStartHour(b));
               
               valHtml = (
-                <div className="flex-[1_1_auto] w-full flex flex-col items-center justify-start gap-[4px] min-w-0 pt-3">
+                <div className="flex-[1_1_auto] w-full flex flex-col items-center justify-start gap-[2px] sm:gap-[4px] min-w-0 pt-0.5 sm:pt-3">
                   {dayLogs.map(e => {
                     if(!e.type) return null;
-                    return renderTag(e, ds, e._origIdx);
+                    const tCls = getBlockClass(e, logs[ds], settings, logs, ds);
+                    return (
+                      <React.Fragment key={e._origIdx}>
+                        {/* Desktop Detailed Tag */}
+                        <div className="hidden sm:contents">
+                          {renderTag(e, ds, e._origIdx)}
+                        </div>
+                        {/* Mobile Micro Chip */}
+                        <div 
+                          className="sm:hidden w-full"
+                          onClick={(ev) => {
+                            if (isCurrentMonthLocked) return;
+                            ev.stopPropagation();
+                            openEditBlock(ds, e._origIdx);
+                          }}
+                        >
+                          <div 
+                            className={`tag-${tCls} !w-full !max-w-none !py-0.5 !px-1 !text-[8px] font-black !rounded !m-0 truncate text-center shadow-xs`}
+                            style={getAdditionalTagStyle(tCls)}
+                          >
+                            {e.type.replace('WORK-', '')} {e.hrs ? `${e.hrs}h` : ''}
+                          </div>
+                        </div>
+                      </React.Fragment>
+                    );
                   })}
                 </div>
               );
@@ -679,7 +797,7 @@ export const Calendar: React.FC<CalendarProps> = ({
                 const tooltipText = tooltipLines.join('\n');
                 payMarker = (
                   <div 
-                    className="pay-marker" 
+                    className="pay-marker !text-[7px] sm:!text-[9px] !px-1 sm:!px-1.5 !py-0 sm:!py-0.5 !bottom-0.5 sm:!bottom-1.5 !right-0.5 sm:!right-1.5" 
                     title={tooltipText} 
                     onClick={(e) => { e.stopPropagation(); showPaycheckAudit(viewYear, viewMonth, d); }}
                   >
@@ -690,13 +808,19 @@ export const Calendar: React.FC<CalendarProps> = ({
             }
 
             return (
-              <div key={d} className={dElCls} title={isCurrentMonthLocked ? "Locked" : "Add a block"} onClick={() => { if (!isCurrentMonthLocked) openModal(ds); }}>
-                {isToday ? <strong className="text-[var(--swa-blue)]">{d}</strong> : <b className="text-[var(--text-main)]">{d}</b>}
-                {isAnni && <div className="anni-banner">🎂 ANNIVERSARY</div>}
-                {swaHolidays[ds] && <div className="sched-hol-banner">{swaHolidays[ds]}</div>}
+              <div 
+                key={d} 
+                id={`day-item-${ds}`} 
+                className={dElCls} 
+                title={isCurrentMonthLocked ? "Locked" : "Add a block"} 
+                onClick={() => { if (!isCurrentMonthLocked) openModal(ds); }}
+              >
+                {isToday ? <strong className="text-[var(--swa-blue)] text-xs sm:text-base">{d}</strong> : <b className="text-[var(--text-main)] text-xs sm:text-base">{d}</b>}
+                {isAnni && <div className="anni-banner text-[6px] sm:text-[7px]">🎂 ANNIV</div>}
+                {swaHolidays[ds] && <div className="sched-hol-banner text-[6px] sm:text-[7px]">{swaHolidays[ds]}</div>}
                 {fallOffs && fallOffs.length > 0 && (
-                  <div className="text-[9px] bg-[var(--swa-red)]/10 text-[var(--swa-red)] font-bold px-1.5 py-0.5 rounded-full mb-1 w-max" title={fallOffs.join('\n')}>
-                    {fallOffs.length > 1 ? `${fallOffs.length} Fall Offs` : fallOffs[0]}
+                  <div className="text-[8px] sm:text-[9px] bg-[var(--swa-red)]/10 text-[var(--swa-red)] font-bold px-1 py-0.5 rounded-full mb-0.5 w-max truncate" title={fallOffs.join('\n')}>
+                    ⚠️ Fall Off
                   </div>
                 )}
                 {valHtml}

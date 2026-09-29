@@ -1,6 +1,6 @@
 {
-  "name": "LUVSchedule",
-  "description": "LUVSchedule: Southwest Airlines Schedule & Attendance Tracker with real-time calculations, Cloud sync, and pay auditing.",
+  "name": "LUV TRACKER",
+  "description": "LUV TRACKER: Southwest Airlines Schedule & Attendance Tracker with real-time calculations, Cloud sync, and pay auditing.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

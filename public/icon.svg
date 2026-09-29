@@ -1,4 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#00467F" rx="100" />
-  <path fill="#FFFFFF" d="M100,250 C 200,100, 300,100, 400,250 C 300,400, 200,400, 100,250" />
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+    <defs>
+      <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#00467F" />
+        <stop offset="100%" stop-color="#112952" />
+      </linearGradient>
+      <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.4"/>
+      </filter>
+    </defs>
+    <rect width="512" height="512" fill="url(#bg)" rx="112" />
+    <g transform="translate(56, 40) scale(4)" filter="url(#glow)">
+      <path d="M50 90 C 20 70, 5 50, 5 30 A 20 20 0 0 1 45 30 A 20 20 0 0 1 85 30 C 85 50, 70 70, 50 90" fill="#CC112C" />
+      <path d="M50 90 C 20 70, 5 50, 5 30 A 20 20 0 0 1 45 30 A 20 20 0 0 1 85 30 C 85 50, 70 70, 50 90" fill="#F9B612" transform="scale(0.7) translate(21, 15)" />
+      <path d="M50 90 C 20 70, 5 50, 5 30 A 20 20 0 0 1 45 30 A 20 20 0 0 1 85 30 C 85 50, 70 70, 50 90" fill="#304CB2" transform="scale(0.4) translate(75, 50)" />
+    </g>
+    <text x="256" y="460" font-family="'Plus Jakarta Sans', system-ui, sans-serif" font-size="48" font-weight="900" fill="#FFFFFF" text-anchor="middle" letter-spacing="4">LUV TRACKER</text>
+  </svg>

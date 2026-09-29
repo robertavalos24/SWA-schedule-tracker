@@ -12,32 +12,82 @@ export default defineConfig(({mode}) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        useCredentials: true,
+        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         devOptions: {
-          enabled: false
+          enabled: true,
+          type: 'module'
+        },
+        workbox: {
+          maximumFileSizeToCacheInBytes: 5000000,
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/__/, /^\/api/],
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'google-fonts-cache',
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'gstatic-fonts-cache',
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+          ]
         },
         manifest: {
-          name: 'SWA Schedule & Attendance',
-          short_name: 'SWA S&A',
+          id: '/',
+          name: 'LUV TRACKER',
+          short_name: 'LUV TRACKER',
           description: 'Southwest Airlines Schedule & Attendance Tracking',
           theme_color: '#00467F',
-          background_color: '#ffffff',
+          background_color: '#00467F',
           display: 'standalone',
+          display_override: ['standalone', 'minimal-ui', 'browser'],
+          start_url: '/',
+          scope: '/',
           icons: [
             {
-              src: 'icon.svg',
+              src: '/pwa-192x192.png',
               sizes: '192x192',
-              type: 'image/svg+xml'
+              type: 'image/png',
+              purpose: 'any'
             },
             {
-              src: 'icon.svg',
+              src: '/pwa-512x512.png',
               sizes: '512x512',
-              type: 'image/svg+xml'
+              type: 'image/png',
+              purpose: 'any'
             },
             {
-              src: 'icon.svg',
+              src: '/pwa-maskable-512x512.png',
               sizes: '512x512',
-              type: 'image/svg+xml',
-              purpose: 'any maskable'
+              type: 'image/png',
+              purpose: 'maskable'
+            },
+            {
+              src: '/icon.svg',
+              sizes: 'any',
+              type: 'image/svg+xml'
             }
           ]
         }

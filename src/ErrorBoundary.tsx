@@ -23,7 +23,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     this.setState({ error, errorInfo });
-    console.error('LUVSchedule Error Caught by Boundary:', error, errorInfo);
+    console.error('LUV TRACKER Error Caught by Boundary:', error, errorInfo);
   }
 
   private handleEmergencyExport = () => {
@@ -39,7 +39,7 @@ export class ErrorBoundary extends Component<Props, State> {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `LUVSchedule_Emergency_Backup_${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `LUV_TRACKER_Emergency_Backup_${new Date().toISOString().split('T')[0]}.json`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -61,7 +61,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </div>
             
             <div>
-              <h2 className="text-2xl font-black tracking-tight text-white mb-2">LUVSchedule Encountered an Issue</h2>
+              <h2 className="text-2xl font-black tracking-tight text-white mb-2">LUV TRACKER Encountered an Issue</h2>
               <p className="text-sm text-slate-400 leading-relaxed">
                 Your schedule and attendance data in local storage is safe. You can reload the page or export an emergency backup copy of your data.
               </p>

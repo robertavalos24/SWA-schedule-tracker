@@ -113,6 +113,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }
   const overallFmlaRemaining = 480 - totalFmlaUsed - totalContinuousHours;
 
+  const [isMobileCardsExpanded, setIsMobileCardsExpanded] = useState(() => {
+    try {
+      return localStorage.getItem('swa_mobile_cards_expanded') === 'true';
+    } catch (e) {
+      return false;
+    }
+  });
+
+  const toggleMobileCards = () => {
+    setIsMobileCardsExpanded(prev => {
+      const next = !prev;
+      try { localStorage.setItem('swa_mobile_cards_expanded', String(next)); } catch (e) {}
+      return next;
+    });
+  };
+
   return (
     <div className="flex flex-col gap-2.5 mb-4">
       {/* Reminders / Alerts Section */}
@@ -169,7 +185,46 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      {/* Mobile Compact Summary Ribbon (Mobile Only) */}
+      <div className="sm:hidden bg-[var(--card-bg)] border border-[var(--border-color)] rounded-2xl p-2.5 shadow-sm">
+        <div className="grid grid-cols-4 gap-1 text-center divide-x divide-[var(--border-color)]">
+          <div className="px-1">
+            <span className="text-[8px] font-black uppercase text-[var(--text-muted)] block tracking-wider">UNPTO</span>
+            <span className={`text-xs font-black truncate block ${stats.unptoHrs > 0 ? 'text-[var(--swa-red)]' : 'text-[var(--pay-green)]'}`}>
+              {stats.unptoHrs !== undefined ? Number(stats.unptoHrs.toFixed(1)) : 0}h
+            </span>
+          </div>
+          <div className="px-1">
+            <span className="text-[8px] font-black uppercase text-[var(--text-muted)] block tracking-wider">Next Drop</span>
+            <span className={`text-xs font-black truncate block ${attDays !== null ? 'text-[var(--swa-blue)]' : 'text-[var(--text-muted)]'}`}>
+              {attDays !== null ? `${attDays}d` : (stats.dropDateText && stats.dropDateText !== 'N/A' ? stats.dropDateText : 'None')}
+            </span>
+          </div>
+          <div className="px-1">
+            <span className="text-[8px] font-black uppercase text-[var(--text-muted)] block tracking-wider">Status</span>
+            <span className="text-xs font-black truncate block" style={{ color: stats.attColor || 'var(--pay-green)' }}>
+              {stats.attLetter || 'Clean'}
+            </span>
+          </div>
+          <div className="px-1">
+            <span className="text-[8px] font-black uppercase text-[var(--text-muted)] block tracking-wider">Avail PTO</span>
+            <span className="text-xs font-black text-[var(--swa-blue)] truncate block">
+              {formatPto(stats.ptoEnd || 0)}h
+            </span>
+          </div>
+        </div>
+
+        <button
+          onClick={toggleMobileCards}
+          className="mt-2 w-full py-1 rounded-xl bg-[var(--sub-bg)] text-[10px] font-bold text-[var(--text-muted)] hover:text-[var(--text-main)] flex items-center justify-center gap-1 transition cursor-pointer"
+        >
+          <span>{isMobileCardsExpanded ? 'Collapse Detailed Cards' : 'Expand All Stat Cards'}</span>
+          {isMobileCardsExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        </button>
+      </div>
+
+      {/* Main Bento Box Grid Cards */}
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 ${isMobileCardsExpanded ? 'block' : 'hidden sm:grid'}`}>
         {(cardPrefs.cardOrder || ['timeoff', 'att', 'mid', 'pay']).map((cardId) => {
           if (cardId === 'timeoff' && (!isYearView && cardPrefs.timeoff)) {
             return (
@@ -193,21 +248,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     }
                   }
                 }}
-                className={`bg-[var(--card-bg)] p-4 rounded-xl shadow-sm text-center border-b-4 border-[var(--swa-blue)] transition-all duration-300 flex flex-col justify-between items-center box-border h-full relative overflow-hidden ${isLocked ? 'cursor-default opacity-90' : 'cursor-grab hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing'}`}
-                onClick={() => { if (!isLocked) openModal('timeoffDetails'); }}
-                title={isLocked ? "Locked" : "Drag to reorder, click to view"}
+                className={`bg-gradient-to-b from-[var(--card-bg)] to-[var(--sub-bg)] border border-[var(--border-color)] p-4 rounded-[var(--card-radius)] shadow-[var(--card-shadow)] text-center transition-all duration-300 flex flex-col justify-between items-center box-border h-full relative overflow-hidden ${isLocked ? 'cursor-default opacity-90' : 'cursor-grab hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing'}`}
               >
-                <div className="absolute top-0 left-0 w-full h-1 flex opacity-50">
+                <div className="absolute top-0 left-0 w-full h-1 flex opacity-40">
                   <div className="flex-1 bg-[var(--swa-blue)] transition-colors"></div>
                   <div className="flex-1 bg-[var(--swa-red)] transition-colors"></div>
                   <div className="flex-1 bg-[var(--swa-yellow)] transition-colors"></div>
                 </div>
-                <div className="w-full flex justify-between items-start mb-2">
-                  <h3 className="m-0 text-[11px] uppercase text-[var(--swa-blue)] font-bold tracking-wider">Time Off Balances</h3>
-                  <div className="bg-[var(--swa-blue)]/10 p-1 rounded text-[var(--swa-blue)]">
-                    <Calendar size={14} />
+
+                {/* Bento Header Pill */}
+                <div className="w-full flex justify-between items-center mb-3">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--swa-blue)]/10 text-[var(--swa-blue)]">
+                    <Calendar size={13} className="shrink-0" />
+                    <h3 className="m-0 text-[10px] uppercase font-black tracking-wider">Time Off Balances</h3>
                   </div>
                 </div>
+
                 <div className="flex w-full justify-around items-start mb-2 gap-1 px-1">
                   <div className="flex flex-col items-center flex-1">
                     <p className="m-0 text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Projected PTO</p>
@@ -253,18 +309,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                 )}
 
-                <div 
-                  className="mt-3 w-full bg-[var(--hover-bg)] hover:bg-[var(--border-color)]/20 py-1.5 rounded-lg flex items-center justify-center gap-1.5 text-[9px] font-black text-[var(--swa-blue)] uppercase tracking-widest transition-all cursor-pointer border border-[var(--border-color)]/10"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsPtoExpanded(!isPtoExpanded);
-                  }}
-                >
-                  {isPtoExpanded ? (
-                    <>Hide Accrual Details <ChevronUp size={12} /></>
-                  ) : (
-                    <>Show Accrual Details <ChevronDown size={12} /></>
-                  )}
+                <div className="w-full grid grid-cols-2 gap-2 mt-3 z-10">
+                  <button 
+                    type="button"
+                    className="bg-[var(--hover-bg)] hover:bg-[var(--border-color)]/20 py-1.5 rounded-lg flex items-center justify-center gap-1 text-[9px] font-black text-[var(--text-muted)] hover:text-[var(--text-main)] uppercase tracking-wider transition-all cursor-pointer border border-[var(--border-color)]/10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsPtoExpanded(!isPtoExpanded);
+                    }}
+                  >
+                    {isPtoExpanded ? 'Hide Accrual' : 'Show Accrual'}
+                  </button>
+                  <button 
+                    type="button"
+                    className="bg-[var(--swa-blue)]/10 hover:bg-[var(--swa-blue)]/20 py-1.5 rounded-lg flex items-center justify-center gap-1 text-[9px] font-black text-[var(--swa-blue)] uppercase tracking-wider transition-all cursor-pointer border border-transparent animate-pulse"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openModal('timeoffDetails');
+                    }}
+                  >
+                    View Details
+                  </button>
                 </div>
               </div>
             );
@@ -292,19 +357,25 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     }
                   }
                 }}
-                className={`bg-[var(--card-bg)] p-4 rounded-xl shadow-sm text-center border-b-4 border-[var(--swa-blue)] transition-all duration-300 flex flex-col justify-between items-center box-border h-full relative overflow-hidden ${stats.tMet > 0 ? `alert-lvl-${stats.tMet}` : ''} ${isLocked ? 'cursor-default opacity-90' : 'cursor-grab hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing'}`}
-                onClick={() => { if (!isLocked) openModal('attendanceDetails'); }}
-                title={isLocked ? "Locked" : "Drag to reorder, click to view"}
+                className={`bg-gradient-to-b from-[var(--card-bg)] to-[var(--sub-bg)] border border-[var(--border-color)] p-4 rounded-[var(--card-radius)] shadow-[var(--card-shadow)] text-center transition-all duration-300 flex flex-col justify-between items-center box-border h-full relative overflow-hidden ${stats.tMet > 0 ? `alert-lvl-${stats.tMet}` : ''} ${isLocked ? 'cursor-default opacity-90' : 'cursor-grab hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing'}`}
               >
-                <div className="absolute top-0 left-0 w-full h-1 flex opacity-50">
+                <div className="absolute top-0 left-0 w-full h-1 flex opacity-40">
                   <div className="flex-1 bg-[var(--swa-blue)] transition-colors"></div>
                   <div className="flex-1 bg-[var(--swa-red)] transition-colors"></div>
                   <div className="flex-1 bg-[var(--swa-yellow)] transition-colors"></div>
                 </div>
-                <div className="w-full flex justify-between items-start mb-2">
-                  <h3 className="m-0 text-[11px] uppercase text-[var(--swa-blue)] font-bold tracking-wider">Status Levels</h3>
-                  <div className="bg-[var(--swa-blue)]/10 p-1 rounded text-[var(--swa-blue)]" style={{ color: stats.attColor, backgroundColor: `${stats.attColor}1A` }}>
-                    <ShieldCheck size={14} />
+
+                {/* Bento Header Pill */}
+                <div className="w-full flex justify-between items-center mb-3">
+                  <div 
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full"
+                    style={{ 
+                      color: stats.attColor || 'var(--swa-blue)', 
+                      backgroundColor: `${stats.attColor || '#243C96'}18` 
+                    }}
+                  >
+                    <ShieldCheck size={13} className="shrink-0" />
+                    <h3 className="m-0 text-[10px] uppercase font-black tracking-wider">Status Levels</h3>
                   </div>
                 </div>
 
@@ -344,22 +415,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     <span className="text-[var(--text-muted)]">Perf Drop</span>
                     <span className={`font-black ${stats.manualDropDateText !== 'N/A' ? 'text-[var(--swa-red)]' : 'text-[var(--swa-blue)]'}`}>{stats.manualDropDateText}</span>
                   </div>
-
                 </div>
 
-                <div className="mt-3 flex items-center justify-center gap-2 text-[9px] font-black text-[var(--swa-blue)] uppercase tracking-widest">
-                  <span className="opacity-80">{isLocked ? "Locked" : "Click for Details"}</span>
-                  {!isLocked && (
-                    <>
-                      <span className="opacity-20">|</span>
-                      <button 
-                        className="opacity-80 hover:opacity-100 transition-opacity bg-transparent border-none p-0 cursor-pointer font-black uppercase tracking-widest text-[9px]"
-                        onClick={(e) => { e.stopPropagation(); openModal('override'); }}
-                      >
-                        Override
-                      </button>
-                    </>
-                  )}
+                <div className="w-full mt-3 grid grid-cols-2 gap-2 z-10">
+                  <button 
+                    type="button"
+                    className="bg-[var(--swa-blue)]/10 hover:bg-[var(--swa-blue)]/20 py-1.5 rounded-lg flex items-center justify-center gap-1 text-[9px] font-black text-[var(--swa-blue)] uppercase tracking-wider transition-all cursor-pointer border border-transparent animate-pulse"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openModal('attendanceDetails');
+                    }}
+                  >
+                    View Details
+                  </button>
+                  <button 
+                    type="button"
+                    disabled={isLocked}
+                    className="bg-[var(--hover-bg)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--border-color)]/20 py-1.5 rounded-lg flex items-center justify-center gap-1 text-[9px] font-black text-[var(--text-muted)] hover:text-[var(--text-main)] uppercase tracking-wider transition-all cursor-pointer border border-[var(--border-color)]/10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openModal('override');
+                    }}
+                  >
+                    Override
+                  </button>
                 </div>
               </div>
             );
@@ -387,19 +466,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     }
                   }
                 }}
-                className={`bg-[var(--card-bg)] p-4 rounded-xl shadow-sm text-center border-b-4 border-[var(--swa-blue)] transition-all duration-300 flex flex-col justify-between items-center box-border h-full relative overflow-hidden ${isLocked ? 'cursor-default opacity-90' : 'cursor-grab hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing'}`}
-                onClick={() => { if (!isLocked) openModal('bulkMid'); }}
-                title={isLocked ? "Locked" : "Drag to reorder, click to view"}
+                className={`bg-gradient-to-b from-[var(--card-bg)] to-[var(--sub-bg)] border border-[var(--border-color)] p-4 rounded-[var(--card-radius)] shadow-[var(--card-shadow)] text-center transition-all duration-300 flex flex-col justify-between items-center box-border h-full relative overflow-hidden ${isLocked ? 'cursor-default opacity-90' : 'cursor-grab hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing'}`}
               >
-                <div className="absolute top-0 left-0 w-full h-1 flex opacity-50">
+                <div className="absolute top-0 left-0 w-full h-1 flex opacity-40">
                   <div className="flex-1 bg-[var(--swa-blue)] transition-colors"></div>
                   <div className="flex-1 bg-[var(--swa-red)] transition-colors"></div>
                   <div className="flex-1 bg-[var(--swa-yellow)] transition-colors"></div>
                 </div>
-                <div className="w-full flex justify-between items-start mb-2">
-                  <h3 className="m-0 text-[11px] uppercase text-[var(--swa-blue)] font-bold tracking-wider">Midnight Shifts</h3>
-                  <div className="bg-[var(--swa-blue)]/10 p-1 rounded text-[var(--swa-blue)]">
-                    <Moon size={14} />
+
+                {/* Bento Header Pill */}
+                <div className="w-full flex justify-between items-center mb-3">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--sh-mid)]/10 text-[var(--sh-mid)] dark:bg-purple-900/30 dark:text-purple-300">
+                    <Moon size={13} className="shrink-0" />
+                    <h3 className="m-0 text-[10px] uppercase font-black tracking-wider">Midnight Shifts</h3>
                   </div>
                 </div>
 
@@ -421,8 +500,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                 </div>
 
-                <div className="mt-3 text-[9px] font-black text-[var(--swa-blue)] uppercase tracking-widest opacity-50">
-                  Click for Details
+                <div className="w-full mt-3 z-10">
+                  <button 
+                    type="button"
+                    className="w-full bg-[var(--swa-blue)]/10 hover:bg-[var(--swa-blue)]/20 py-1.5 rounded-lg flex items-center justify-center gap-1 text-[9px] font-black text-[var(--swa-blue)] uppercase tracking-wider transition-all cursor-pointer border border-transparent animate-pulse"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openModal('bulkMid');
+                    }}
+                  >
+                    View Details
+                  </button>
                 </div>
               </div>
             );
@@ -450,34 +538,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     }
                   }
                 }}
-                className={`bg-[var(--card-bg)] p-4 rounded-xl shadow-sm text-center border-b-4 border-[var(--pay-green)] transition-all duration-300 flex flex-col justify-between items-center box-border h-full relative overflow-hidden ${isLocked ? 'cursor-default opacity-90' : 'cursor-grab hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing'}`}
-                onClick={() => {
-                  if (isLocked) return;
-                  if (isPayCensored) {
-                    setIsPayCensored(false);
-                  } else {
-                    openModal('ytdSummary');
-                  }
-                }}
-                onDoubleClick={() => { if (!isLocked) setIsPayCensored(true); }}
-                title={isLocked ? "Locked" : (isPayCensored ? "Drag to reorder, click to reveal" : "Double-click to hide")}
+                className={`bg-gradient-to-b from-[var(--card-bg)] to-[var(--sub-bg)] border border-[var(--border-color)] p-4 rounded-[var(--card-radius)] shadow-[var(--card-shadow)] text-center transition-all duration-300 flex flex-col justify-between items-center box-border h-full relative overflow-hidden ${isLocked ? 'cursor-default opacity-90' : 'cursor-grab hover:-translate-y-0.5 hover:shadow-md active:cursor-grabbing'}`}
               >
-                <div className="absolute top-0 left-0 w-full h-1 flex opacity-50">
+                <div className="absolute top-0 left-0 w-full h-1 flex opacity-40">
                   <div className="flex-1 bg-[var(--swa-blue)] transition-colors"></div>
                   <div className="flex-1 bg-[var(--swa-red)] transition-colors"></div>
                   <div className="flex-1 bg-[var(--swa-yellow)] transition-colors"></div>
                 </div>
-                <div className="w-full flex justify-between items-start mb-2">
-                  <h3 className="m-0 text-[11px] uppercase text-[var(--swa-blue)] font-bold tracking-wider">Annual Gross Pay</h3>
+
+                {/* Bento Header Pill */}
+                <div className="w-full flex justify-between items-center mb-3">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--pay-green)]/10 text-[var(--pay-green)]">
+                    <TrendingUp size={13} className="shrink-0" />
+                    <h3 className="m-0 text-[10px] uppercase font-black tracking-wider">Annual Gross Pay</h3>
+                  </div>
                   <button 
-                    className="bg-[var(--pay-green)]/10 p-1 rounded text-[var(--pay-green)] hover:bg-[var(--pay-green)]/20 transition-colors cursor-pointer"
+                    className="bg-[var(--pay-green)]/10 p-1.5 rounded-full text-[var(--pay-green)] hover:bg-[var(--pay-green)]/20 transition-colors cursor-pointer"
                     onClick={(e) => {
                       e.stopPropagation();
                       setIsPayCensored(!isPayCensored);
                     }}
                     title={isPayCensored ? "Click to reveal" : "Click to hide"}
                   >
-                    {isPayCensored ? <EyeOff size={14} /> : <Eye size={14} />}
+                    {isPayCensored ? <EyeOff size={13} /> : <Eye size={13} />}
                   </button>
                 </div>
                 
@@ -504,8 +587,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                 </div>
                 
-                <div className="mt-3 text-[9px] font-black text-[var(--swa-blue)] uppercase tracking-widest opacity-50">
-                  {isPayCensored ? 'Click to Reveal' : 'Click for Breakdown'}
+                <div className="w-full mt-3 z-10">
+                  <button 
+                    type="button"
+                    className="w-full bg-[var(--pay-green)]/10 hover:bg-[var(--pay-green)]/20 py-1.5 rounded-lg flex items-center justify-center gap-1 text-[9px] font-black text-[var(--pay-green)] uppercase tracking-wider transition-all cursor-pointer border border-transparent animate-pulse"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isPayCensored) {
+                        setIsPayCensored(false);
+                      } else {
+                        openModal('ytdSummary');
+                      }
+                    }}
+                  >
+                    {isPayCensored ? 'Reveal Pay' : 'View Breakdown'}
+                  </button>
                 </div>
               </div>
             );

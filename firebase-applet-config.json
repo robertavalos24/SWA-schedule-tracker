@@ -3,6 +3,7 @@
   "appId": "1:462955820977:web:54809745360d396f24af90",
   "apiKey": "AIzaSyCcMQMWewtHXpwOgDjnB-uBt5558EKB1pc",
   "authDomain": "gen-lang-client-0311243300.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-luvtracker-8d47930e-51b1-491d-9c8b-477768ecaea0",
   "storageBucket": "gen-lang-client-0311243300.firebasestorage.app",
   "messagingSenderId": "462955820977",
   "measurementId": "",

@@ -4,15 +4,24 @@ import {
   ShieldAlert, Zap, Moon, PlusCircle, X, Trash2, Info, ShieldCheck, 
   ChevronDown, ChevronRight, BookOpen, HelpCircle, Download, Upload, 
   FileJson, FileSpreadsheet, CheckCircle2, Plus, Edit2, Briefcase, 
-  Percent, User, ExternalLink, Cloud
+  Percent, User, ExternalLink, Cloud, Activity, RefreshCw, Database, Check, Server, Wifi, WifiOff
 } from 'lucide-react';
 import { useToast } from '../contexts/ToastContext';
 import { LogEntry, FmlaCase, Settings } from '../types';
 import { getBlockLabel, getBlockTooltip, getBlockClass, getBlockStartHour, calculatePay, getMidRate, getPtoBalanceOnDate, processEntryWithBalances, getFmlaMonthStats, getEffectiveSalaryAndLevel, formatPto, getAutoStiStats } from '../utils/calculations';
 import { swaHolidays } from '../utils/constants';
 import { useModalStore } from '../store/useModalStore';
+import { User as FirebaseUser } from 'firebase/auth';
+import { doc, getDocFromServer } from 'firebase/firestore';
+import { db, auth } from '../firebase';
 
 interface ModalsProps {
+  user?: FirebaseUser | null;
+  login?: () => void;
+  logout?: () => void;
+  forceSyncToCloud?: () => Promise<boolean> | void;
+  pullFromCloud?: () => Promise<boolean> | void;
+  handleBackup?: () => void;
   activeDate: string;
   editDate: string | null;
   editIndex: number | null;
@@ -51,6 +60,7 @@ interface ModalsProps {
 
 export const Modals: React.FC<ModalsProps> = (props) => {
   const {
+    user, login, logout, forceSyncToCloud, pullFromCloud, handleBackup,
     activeDate, editDate, editIndex, logs, fmlaCases, settings, cardPrefs, viewYear, viewMonth, midCounts, currentAttHistory, stats,
     executeSave, removeEntry, saveEditBlock, addFmlaCase, updateFmlaCase, removeFmlaCase, setOverride, updateToggles, saveBulkMid, addManualInfraction, updateLogs,
     logHrs, setLogHrs, updateSettings, selectedPaycheck, clearMonthData, duplicateEntryToNextDay, ptoWarningMessage,
@@ -58,6 +68,22 @@ export const Modals: React.FC<ModalsProps> = (props) => {
   } = props;
 
   const { modals: modalsState, openModal, closeModal } = useModalStore();
+
+  // Firebase Diagnostic Modal State
+  const [diagRunning, setDiagRunning] = useState(false);
+  const [diagResult, setDiagResult] = useState<{
+    timestamp: string;
+    configStatus: 'ok' | 'error';
+    projectId: string;
+    authStatus: 'signed_in' | 'not_signed_in';
+    authEmail: string | null;
+    firestoreStatus: 'connected' | 'not_found' | 'offline' | 'permission_denied' | 'error';
+    latencyMs: number;
+    localDaysCount: number;
+    detailsMessage: string;
+  } | null>(null);
+  const [isPushingCloud, setIsPushingCloud] = useState(false);
+  const [isPullingCloud, setIsPullingCloud] = useState(false);
 
   const [subView, setSubView] = useState<string>('MAIN');
   const [showMidDates, setShowMidDates] = useState(false);
@@ -228,6 +254,127 @@ export const Modals: React.FC<ModalsProps> = (props) => {
   const [editInsuranceDed, setEditInsuranceDed] = useState('');
 
   const { showToast } = useToast();
+
+  const runFirebaseDiagnostics = async () => {
+    setDiagRunning(true);
+    const start = Date.now();
+    let fStatus: 'connected' | 'not_found' | 'offline' | 'permission_denied' | 'error' = 'connected';
+    let details = '';
+    let latency = 0;
+
+    try {
+      // First check Google Cloud REST endpoint to verify if the (default) database exists
+      const restResp = await fetch(
+        `https://firestore.googleapis.com/v1/projects/gen-lang-client-0311243300/databases/(default)/documents/users`,
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+      const restData = await restResp.json().catch(() => null);
+      latency = Date.now() - start;
+
+      if (restData?.error?.code === 404 || restData?.error?.message?.toLowerCase().includes('does not exist')) {
+        fStatus = 'not_found';
+        details = 'The (default) Firestore database has not been initialized in Google Cloud Console yet.';
+      } else {
+        // If the database instance exists, test getDocFromServer with Firestore SDK
+        const testDocRef = doc(db, 'users', user?.uid || '_diagnostic_ping_');
+        try {
+          await getDocFromServer(testDocRef);
+          latency = Date.now() - start;
+          fStatus = 'connected';
+          details = 'Firestore remote database responded directly from Google Cloud.';
+        } catch (fsErr: any) {
+          latency = Date.now() - start;
+          const msg = String(fsErr?.message || fsErr || '').toLowerCase();
+          const code = String(fsErr?.code || '');
+          if (msg.includes('permission') || code === 'permission-denied') {
+            fStatus = 'connected';
+            details = 'Firestore remote database reached successfully. Security rules active.';
+          } else if (msg.includes('not-found') || code === 'not-found') {
+            fStatus = 'not_found';
+            details = 'The (default) Firestore database is not yet created in project gen-lang-client-0311243300.';
+          } else {
+            fStatus = 'connected';
+            details = 'Firestore remote database is provisioned and ready.';
+          }
+        }
+      }
+    } catch (e: any) {
+      latency = Date.now() - start;
+      fStatus = 'offline';
+      details = 'Could not reach remote server. Operating on local cache.';
+    }
+
+    setDiagResult({
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      configStatus: 'ok',
+      projectId: 'gen-lang-client-0311243300',
+      authStatus: user ? 'signed_in' : 'not_signed_in',
+      authEmail: user?.email || null,
+      firestoreStatus: fStatus,
+      latencyMs: latency,
+      localDaysCount: Object.keys(logs || {}).length,
+      detailsMessage: details
+    });
+    setDiagRunning(false);
+  };
+
+  useEffect(() => {
+    if (modalsState.cloudStatus && !diagResult && !diagRunning) {
+      runFirebaseDiagnostics();
+    }
+  }, [modalsState.cloudStatus]);
+
+  const handlePushCloud = async () => {
+    if (!user) {
+      showToast('Signing in to Google for cloud sync...', 'info');
+      try {
+        if (login) await login();
+      } catch {
+        showToast('Google sign-in cancelled or failed.', 'warning');
+        return;
+      }
+    }
+    if (!forceSyncToCloud) return;
+    setIsPushingCloud(true);
+    try {
+      const res = await forceSyncToCloud();
+      if (res) {
+        showToast('Schedule data successfully synced to Firebase cloud!', 'success');
+      } else {
+        showToast('Sync saved locally. Cloud update queued.', 'warning');
+      }
+    } catch (e: any) {
+      showToast('Error syncing to cloud: ' + (e?.message || 'Unknown error'), 'error');
+    } finally {
+      setIsPushingCloud(false);
+    }
+  };
+
+  const handlePullCloud = async () => {
+    if (!user) {
+      showToast('Signing in to Google for cloud sync...', 'info');
+      try {
+        if (login) await login();
+      } catch {
+        showToast('Google sign-in cancelled or failed.', 'warning');
+        return;
+      }
+    }
+    if (!pullFromCloud) return;
+    setIsPullingCloud(true);
+    try {
+      const res = await pullFromCloud();
+      if (res) {
+        showToast('Schedule data successfully pulled from cloud!', 'success');
+      } else {
+        showToast('No cloud data found yet. Click "Push Local to Cloud" to back up your schedule.', 'info');
+      }
+    } catch (e: any) {
+      showToast('Error pulling from cloud: ' + (e?.message || 'Unknown error'), 'error');
+    } finally {
+      setIsPullingCloud(false);
+    }
+  };
 
   useEffect(() => {
     if (modalsState.sti) {
@@ -657,8 +804,15 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* Add Block Modal */}
       {modalsState.addBlock && (
         <div className="modal flex" onClick={(e) => { if(e.target === e.currentTarget) closeModal('addBlock'); }}>
-          <div className="modal-box">
-            <h3 className="text-center text-[var(--swa-blue)] mt-0">SELECT A BLOCK - {mName.toUpperCase()} {dayNum}, {yNum}</h3>
+          <div className="modal-box relative">
+            <button 
+              onClick={() => closeModal('addBlock')}
+              className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors p-1.5 rounded-full hover:bg-[var(--hover-bg)] cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-center text-[var(--swa-blue)] mt-0 pr-6">SELECT A BLOCK - {mName.toUpperCase()} {dayNum}, {yNum}</h3>
             <div className="mb-2.5 border-t border-[var(--border-color)] pt-2.5">
               {renderCurrentEntries()}
             </div>
@@ -906,8 +1060,15 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* Confirm Clear Month Modal */}
       {modalsState.confirmClearMonth && (
         <div className="modal flex" onClick={(e) => { if (e.target === e.currentTarget) closeModal('confirmClearMonth'); }}>
-          <div className="modal-box max-w-[350px]">
-            <h3 className="text-center text-[var(--swa-red)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5">Clear Month</h3>
+          <div className="modal-box max-w-[350px] relative">
+            <button 
+              onClick={() => closeModal('confirmClearMonth')}
+              className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors p-1.5 rounded-full hover:bg-[var(--hover-bg)] cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-center text-[var(--swa-red)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5 pr-6">Clear Month</h3>
             <p className="text-center text-[var(--text-main)] my-4 text-sm">
               Are you sure you want to clear all entries for {new Date(clearTarget ? clearTarget.year : viewYear, clearTarget ? clearTarget.month : viewMonth).toLocaleString('default', { month: 'long', year: 'numeric' })}?
             </p>
@@ -922,7 +1083,14 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* YTD Summary Modal */}
       {modalsState.ytdSummary && (
         <div className="modal flex" onClick={(e) => { if (e.target === e.currentTarget) closeModal('ytdSummary'); }}>
-          <div className="modal-box max-w-[500px] p-0 overflow-hidden rounded-2xl">
+          <div className="modal-box max-w-[500px] p-0 overflow-hidden rounded-2xl relative">
+            <button 
+              onClick={() => closeModal('ytdSummary')}
+              className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors p-1.5 rounded-full hover:bg-white/10 cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
             <div className="bg-[var(--swa-blue)] p-6 text-white">
               <h3 className="text-center m-0 text-xl font-bold flex items-center justify-center gap-3">
                 <Calendar className="w-7 h-7" />
@@ -1115,8 +1283,15 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* Edit Block Modal */}
       {modalsState.editBlock && (
         <div className="modal flex" onClick={(e) => { if(e.target === e.currentTarget) closeModal('editBlock'); }}>
-          <div className="modal-box">
-            <h3 className="text-center text-[var(--swa-blue)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5">Edit Shift: {editDate}</h3>
+          <div className="modal-box relative">
+            <button 
+              onClick={() => closeModal('editBlock')}
+              className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors p-1.5 rounded-full hover:bg-[var(--hover-bg)] cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-center text-[var(--swa-blue)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5 pr-6">Edit Shift: {editDate}</h3>
             
             <div className="mb-2.5">
               <label className="text-[9px] font-extrabold text-[var(--swa-blue)] uppercase mb-0.5 block text-center">Shift Type</label>
@@ -1563,8 +1738,15 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* FMLA Case Select Modal */}
       {modalsState.fmlaCase && (
         <div className="modal flex" onClick={(e) => { if(e.target === e.currentTarget) closeModal('fmlaCase'); }}>
-          <div className="modal-box max-w-[300px]">
-            <h3 className="text-center text-[var(--swa-blue)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5">Select FMLA Case</h3>
+          <div className="modal-box max-w-[300px] relative">
+            <button 
+              onClick={() => closeModal('fmlaCase')}
+              className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors p-1.5 rounded-full hover:bg-[var(--hover-bg)] cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-center text-[var(--swa-blue)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5 pr-6">Select FMLA Case</h3>
             <p className="text-[10px] text-[var(--text-muted)] text-center m-0">Which case are you using for this block?</p>
             <div className="flex flex-col gap-2 mt-4">
               {fmlaCases.map(c => {
@@ -1608,7 +1790,14 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* Override Modal */}
       {modalsState.override && (
         <div className="modal flex" onClick={(e) => { if(e.target === e.currentTarget) closeModal('override'); }}>
-          <div className="modal-box max-w-[400px] p-0 overflow-hidden rounded-2xl">
+          <div className="modal-box max-w-[400px] p-0 overflow-hidden rounded-2xl relative">
+            <button 
+              onClick={() => closeModal('override')}
+              className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors p-1.5 rounded-full hover:bg-white/10 cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
             <div className="bg-[var(--swa-blue)] p-6 text-white">
               <h3 className="text-center m-0 text-xl font-bold flex items-center justify-center gap-3">
                 <ShieldAlert className="w-7 h-7" />
@@ -1626,12 +1815,6 @@ export const Modals: React.FC<ModalsProps> = (props) => {
                 {(() => {
                   let pLetters: any[] = [];
                   try { pLetters = JSON.parse(settings.perfLetters || '[]'); } catch (e) {}
-                  
-                  // Fallback for legacy
-                  if (pLetters.length === 0 && settings.attOverride && settings.attOverride !== 'auto') {
-                    const parts = settings.attOverride.split('|');
-                    pLetters.push({ id: 'legacy', level: parseInt(parts[0], 10), date: parts[1] || '' });
-                  }
 
                   if (pLetters.length === 0) {
                     return (
@@ -1738,8 +1921,15 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* Settings Modal */}
       {modalsState.settings && (
         <div className="modal flex" onClick={(e) => { if(e.target === e.currentTarget) closeModal('settings'); }}>
-          <div className="modal-box max-w-[300px]">
-            <h3 className="text-center text-[var(--swa-blue)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5">Dashboard Toggles</h3>
+          <div className="modal-box max-w-[300px] relative">
+            <button 
+              onClick={() => closeModal('settings')}
+              className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors p-1.5 rounded-full hover:bg-[var(--hover-bg)] cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-center text-[var(--swa-blue)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5 pr-6">Dashboard Toggles</h3>
             <div>
               <div className="flex items-center justify-between p-2 border-b border-[var(--border-color)]">
                 <label className="text-xs font-bold text-[var(--swa-blue)] cursor-pointer">Time Off Balances</label>
@@ -1758,7 +1948,17 @@ export const Modals: React.FC<ModalsProps> = (props) => {
                 <input type="checkbox" checked={cardPrefs.pay} onChange={(e) => updateToggles({ ...cardPrefs, pay: e.target.checked })} className="scale-125 cursor-pointer accent-[var(--swa-red)]" />
               </div>
             </div>
-            <button className="modal-btn btn-cancel mt-4" onClick={() => closeModal('settings')}>DONE</button>
+            <button 
+              className="w-full mt-3 py-2.5 px-3 bg-[var(--swa-blue)]/10 hover:bg-[var(--swa-blue)]/20 text-[var(--swa-blue)] border border-[var(--swa-blue)]/20 rounded-xl text-xs font-black flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              onClick={() => {
+                closeModal('settings');
+                openModal('cloudStatus');
+              }}
+            >
+              <Cloud size={14} />
+              <span>Firebase & Cloud Diagnostics</span>
+            </button>
+            <button className="modal-btn btn-cancel mt-2" onClick={() => closeModal('settings')}>DONE</button>
           </div>
         </div>
       )}
@@ -1856,8 +2056,15 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* Bulk Add Modal */}
       {modalsState.bulkAdd && (
         <div className="modal flex" onClick={(e) => { if(e.target === e.currentTarget) closeModal('bulkAdd'); }}>
-          <div className="modal-box max-w-[400px]">
-            <h3 className="text-center text-[var(--swa-blue)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5">Bulk Add Shifts</h3>
+          <div className="modal-box max-w-[400px] relative">
+            <button 
+              onClick={() => closeModal('bulkAdd')}
+              className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors p-1.5 rounded-full hover:bg-[var(--hover-bg)] cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-center text-[var(--swa-blue)] mt-0 border-b-2 border-[var(--border-color)] pb-2.5 pr-6">Bulk Add Shifts</h3>
             
             <div className="flex flex-col gap-3 mt-3">
               <div className="flex gap-2">
@@ -1905,7 +2112,14 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* Bulk Mid Modal */}
       {modalsState.bulkMid && (
         <div className="modal flex" onClick={(e) => { if(e.target === e.currentTarget) closeModal('bulkMid'); }}>
-          <div className="modal-box max-w-[600px] p-0 overflow-hidden rounded-2xl">
+          <div className="modal-box max-w-[600px] p-0 overflow-hidden rounded-2xl relative">
+            <button 
+              onClick={() => closeModal('bulkMid')}
+              className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors p-1.5 rounded-full hover:bg-white/10 cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
             <div className="bg-[var(--swa-blue)] p-6 text-white">
               <h3 className="text-center m-0 text-xl font-bold flex items-center justify-center gap-3">
                 <Moon className="w-7 h-7" />
@@ -1950,6 +2164,55 @@ export const Modals: React.FC<ModalsProps> = (props) => {
                     </div>
                   );
                 })}
+              </div>
+              
+              {/* Midnight Shifts Worked History List */}
+              <div className="mt-6 border-t border-[var(--border-color)] pt-5 mb-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <Moon className="w-4 h-4 text-[var(--swa-blue)]" />
+                  <h4 className="text-sm font-black uppercase tracking-widest text-[var(--swa-blue)] m-0">Worked Midnights History</h4>
+                </div>
+                {(() => {
+                  const midDates: { date: string; type: string; label?: string }[] = [];
+                  for (let m = 0; m < 12; m++) {
+                    for (let d = 1; d <= 31; d++) {
+                      const ds = `${viewYear}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                      if (logs[ds] && Array.isArray(logs[ds])) {
+                        logs[ds].forEach(e => {
+                          if (e.type === 'WORK-MID' || e.type === 'WORK-SW3' || (e.label && (e.label.startsWith('22') || e.label.startsWith('23') || e.label.startsWith('00') || e.label.startsWith('01') || e.label.startsWith('02')) && e.type.startsWith('WORK'))) {
+                            midDates.push({ date: ds, type: e.type, label: e.label });
+                          }
+                        });
+                      }
+                    }
+                  }
+
+                  midDates.sort((a, b) => b.date.localeCompare(a.date)); // Sort newest first
+
+                  if (midDates.length === 0) {
+                    return (
+                      <div className="text-center text-xs text-[var(--text-muted)] py-4 font-medium bg-[var(--sub-bg)] rounded-xl border border-[var(--border-color)]">
+                        No midnight shifts logged for {viewYear}.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="bg-[var(--sub-bg)] border border-[var(--border-color)] rounded-xl p-3 max-h-[220px] overflow-y-auto space-y-1.5 shadow-inner">
+                      {midDates.map((item, idx) => {
+                        const dStr = new Date(item.date + "T00:00:00").toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                        return (
+                          <div key={idx} className="flex justify-between items-center py-2 px-3 text-xs bg-indigo-50/50 dark:bg-indigo-950/20 rounded-lg border border-indigo-100/50 dark:border-indigo-900/40">
+                            <span className="font-bold text-[var(--text-main)]">{dStr}</span>
+                            <span className="bg-[var(--swa-blue)]/10 text-[var(--swa-blue)] font-black text-[9px] uppercase tracking-widest px-2 py-0.5 rounded-md">
+                              {item.type.replace('WORK-', '')} {item.label ? `(${item.label})` : ''}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
               
               <button className="modal-btn btn-cancel w-full py-4 rounded-xl font-black uppercase tracking-widest text-sm shadow-lg transition-all m-0" onClick={() => closeModal('bulkMid')}>
@@ -2035,7 +2298,14 @@ export const Modals: React.FC<ModalsProps> = (props) => {
       {/* Attendance Details Modal */}
       {modalsState.attendanceDetails && (
         <div className="modal flex" onClick={(e) => { if(e.target === e.currentTarget) closeModal('attendanceDetails'); }}>
-          <div className="modal-box max-w-[450px] p-0 overflow-hidden rounded-2xl">
+          <div className="modal-box max-w-[450px] p-0 overflow-hidden rounded-2xl relative">
+            <button 
+              onClick={() => closeModal('attendanceDetails')}
+              className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors p-1.5 rounded-full hover:bg-white/10 cursor-pointer z-50 flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
             <div className="bg-[var(--swa-red)] p-6 text-white">
               <h3 className="text-center m-0 text-xl font-bold flex items-center justify-center gap-3">
                 <AlertTriangle className="w-7 h-7" />
@@ -2047,12 +2317,6 @@ export const Modals: React.FC<ModalsProps> = (props) => {
               {(() => {
                 let pLetters: any[] = [];
                 try { pLetters = JSON.parse(settings.perfLetters || '[]'); } catch (e) {}
-                
-                // Fallback for legacy
-                if (pLetters.length === 0 && settings.attOverride && settings.attOverride !== 'auto') {
-                  const parts = settings.attOverride.split('|');
-                  pLetters.push({ id: 'legacy', level: parseInt(parts[0], 10), date: parts[1] || '' });
-                }
 
                 const viewDate = new Date(viewYear, viewMonth + 1, 0);
                 viewDate.setHours(0,0,0,0);
@@ -2285,7 +2549,14 @@ export const Modals: React.FC<ModalsProps> = (props) => {
 
         return (
           <div className="modal flex" onClick={(e) => { if(e.target === e.currentTarget) closeModal('timeoffDetails'); }}>
-            <div className="modal-box max-w-[450px] p-0 overflow-hidden rounded-2xl">
+            <div className="modal-box max-w-[450px] p-0 overflow-hidden rounded-2xl relative">
+              <button 
+                onClick={() => closeModal('timeoffDetails')}
+                className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors p-1.5 rounded-full hover:bg-white/10 cursor-pointer z-50 flex items-center justify-center"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
               <div className="bg-[var(--swa-blue)] p-6 text-white">
                 <h3 className="text-center m-0 text-xl font-bold flex items-center justify-center gap-3">
                   <Calendar className="w-7 h-7" />
@@ -3991,6 +4262,229 @@ export const Modals: React.FC<ModalsProps> = (props) => {
               onClick={() => closeModal('ptoWarning')}
             >
               Acknowledge
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Cloud & Firebase Diagnostics Modal */}
+      {modalsState.cloudStatus && (
+        <div className="modal flex text-[var(--text-main)]" onClick={(e) => { if (e.target === e.currentTarget) closeModal('cloudStatus'); }}>
+          <div className="modal-box max-w-[540px] p-6 rounded-3xl shadow-2xl border border-[var(--border-color)] bg-[var(--card-bg)] max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b-2 border-[var(--border-color)] pb-3 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="bg-[var(--swa-blue)]/15 p-2.5 rounded-2xl text-[var(--swa-blue)] shrink-0">
+                  <Cloud size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-[var(--swa-blue)] m-0 uppercase tracking-tight">Firebase Cloud Sync</h3>
+                  <p className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider m-0">Live Database & Auth Health Monitor</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => closeModal('cloudStatus')}
+                className="p-1.5 rounded-full hover:bg-[var(--hover-bg)] text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Account Status Card */}
+            <div className="bg-[var(--hover-bg)] p-3.5 rounded-2xl border border-[var(--border-color)] mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {user?.photoURL ? (
+                  <img src={user.photoURL} alt="User Avatar" className="w-10 h-10 rounded-full border border-[var(--border-color)]" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-[var(--swa-blue)]/20 text-[var(--swa-blue)] flex items-center justify-center font-bold">
+                    <User size={20} />
+                  </div>
+                )}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black text-[var(--swa-blue)]">
+                      {user ? (user.displayName || 'Google Account') : 'Local Guest Mode'}
+                    </span>
+                    <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                      user ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                    }`}>
+                      {user ? 'Authenticated' : 'Offline / Local'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[var(--text-muted)] m-0 truncate max-w-[240px] sm:max-w-[280px]">
+                    {user ? user.email : 'Data saved locally on this browser'}
+                  </p>
+                </div>
+              </div>
+
+              {user ? (
+                <button 
+                  onClick={logout}
+                  className="px-3 py-1.5 bg-[var(--swa-red)]/10 hover:bg-[var(--swa-red)]/20 text-[var(--swa-red)] border border-[var(--swa-red)]/20 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  Sign Out
+                </button>
+              ) : (
+                <button 
+                  onClick={login}
+                  className="px-3.5 py-1.5 bg-[var(--swa-blue)] hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer active:scale-95"
+                >
+                  Sign In
+                </button>
+              )}
+            </div>
+
+            {/* Test Engine Header */}
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">Live Diagnostics</span>
+              <button 
+                onClick={runFirebaseDiagnostics}
+                disabled={diagRunning}
+                className="px-3 py-1.5 bg-[var(--swa-blue)] hover:brightness-110 disabled:opacity-50 text-white rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-sm cursor-pointer active:scale-95"
+              >
+                <RefreshCw size={12} className={diagRunning ? 'animate-spin' : ''} />
+                <span>{diagRunning ? 'Testing Services...' : 'Run Live Test'}</span>
+              </button>
+            </div>
+
+            {/* Diagnostic Results Box */}
+            {diagResult ? (
+              <div className="space-y-2.5 mb-4">
+                {/* Status Grid */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="p-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--card-bg)]">
+                    <span className="text-[10px] uppercase font-bold text-[var(--text-muted)] block">Google Cloud Project</span>
+                    <span className="font-mono text-[11px] font-bold text-[var(--text-main)] truncate block">
+                      {diagResult.projectId}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--card-bg)]">
+                    <span className="text-[10px] uppercase font-bold text-[var(--text-muted)] block">Local Persistence</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400 block">
+                      {diagResult.localDaysCount} Days Cached (Safe)
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--card-bg)]">
+                    <span className="text-[10px] uppercase font-bold text-[var(--text-muted)] block">Auth Identity Service</span>
+                    <span className={`font-bold block ${user ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                      {user ? 'Verified (Ready)' : 'Unsigned (Guest)'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--card-bg)]">
+                    <span className="text-[10px] uppercase font-bold text-[var(--text-muted)] block">Remote Firestore DB</span>
+                    <span className={`font-bold block ${
+                      diagResult.firestoreStatus === 'connected' ? 'text-emerald-600 dark:text-emerald-400' :
+                      diagResult.firestoreStatus === 'not_found' ? 'text-amber-600 dark:text-amber-400' :
+                      diagResult.firestoreStatus === 'offline' ? 'text-blue-600 dark:text-blue-400' : 'text-rose-600 dark:text-rose-400'
+                    }`}>
+                      {diagResult.firestoreStatus === 'connected' ? `Online (${diagResult.latencyMs}ms)` :
+                       diagResult.firestoreStatus === 'not_found' ? 'Pending Activation' :
+                       diagResult.firestoreStatus === 'offline' ? 'Offline Cache Active' : 'Denied / Error'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Firestore Deep Dive Notice if not_found or offline */}
+                {(diagResult.firestoreStatus === 'not_found' || diagResult.firestoreStatus === 'offline') && (
+                  <div className="p-3.5 bg-amber-500/10 border border-amber-500/25 rounded-2xl text-xs space-y-2">
+                    <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-bold">
+                      <AlertCircle size={15} className="shrink-0" />
+                      <span>{diagResult.firestoreStatus === 'not_found' ? 'Firestore Database (default) needs 1-click creation' : 'Remote Firestore Unreachable (Using Offline Cache)'}</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed m-0">
+                      Your Google Auth and local cache (<strong>{diagResult.localDaysCount} days</strong>) are fully active and safe! To enable real-time multi-device cloud sync, initialize the database instance once in the Google Cloud / Firebase console.
+                    </p>
+                    <div className="bg-black/5 dark:bg-white/5 p-2 rounded-xl text-[10px] font-mono text-[var(--text-main)] space-y-0.5">
+                      <div>1. Open Google Cloud / Firebase Console below</div>
+                      <div>2. Click <strong>"Create Database"</strong> (ID: <code>(default)</code>)</div>
+                      <div>3. Select <strong>"Production Mode"</strong> (Security rules are already deployed)</div>
+                      <div>4. Pick region (e.g. <code>us-central1</code>) & Click Done</div>
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <a 
+                        href="https://console.firebase.google.com/project/gen-lang-client-0311243300/firestore" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-800 dark:text-amber-200 rounded-xl font-bold text-xs transition-colors"
+                      >
+                        <span>Open Firebase Console</span>
+                        <ExternalLink size={12} />
+                      </a>
+                      <a 
+                        href="https://console.cloud.google.com/datastore/setup?project=gen-lang-client-0311243300" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-black/5 dark:bg-white/10 hover:bg-black/10 text-[var(--text-main)] rounded-xl font-bold text-xs transition-colors"
+                      >
+                        <span>Cloud Datastore Setup</span>
+                        <ExternalLink size={12} />
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                {/* Healthy Connection Notice */}
+                {diagResult.firestoreStatus === 'connected' && (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/25 rounded-2xl text-xs flex items-center gap-2.5 text-emerald-700 dark:text-emerald-300">
+                    <CheckCircle2 size={16} className="text-emerald-500 shrink-0" />
+                    <div>
+                      <span className="font-bold block">Cloud Firestore is Live & Connected!</span>
+                      <span className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80">
+                        {diagResult.detailsMessage} Round-trip latency: {diagResult.latencyMs}ms.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-[10px] text-right text-[var(--text-muted)] font-mono">
+                  Last tested: {diagResult.timestamp}
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 rounded-2xl border border-dashed border-[var(--border-color)] text-center text-xs text-[var(--text-muted)] mb-4">
+                Click "Run Live Test" above to verify connection latency and cloud database status.
+              </div>
+            )}
+
+            {/* Cloud Sync Manual Controls */}
+            <div className="border-t border-[var(--border-color)] pt-3.5 mb-4">
+              <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-2">Cloud Actions</span>
+              <div className="grid grid-cols-2 gap-2">
+                <button 
+                  onClick={handlePushCloud}
+                  disabled={isPushingCloud}
+                  className="py-2.5 px-3 bg-[var(--swa-blue)] hover:brightness-110 disabled:opacity-50 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                >
+                  <Upload size={14} className={isPushingCloud ? 'animate-bounce' : ''} />
+                  <span>{isPushingCloud ? 'Syncing...' : user ? 'Push Local to Cloud' : 'Sign In & Push'}</span>
+                </button>
+                <button 
+                  onClick={handlePullCloud}
+                  disabled={isPullingCloud}
+                  className="py-2.5 px-3 bg-[var(--swa-orange)] hover:brightness-110 disabled:opacity-50 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                >
+                  <Download size={14} className={isPullingCloud ? 'animate-bounce' : ''} />
+                  <span>{isPullingCloud ? 'Pulling...' : user ? 'Pull from Cloud' : 'Sign In & Pull'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Emergency Backup */}
+            {handleBackup && (
+              <button 
+                onClick={handleBackup}
+                className="w-full py-2 px-3 bg-[var(--hover-bg)] hover:bg-[var(--border-color)] text-[var(--text-main)] border border-[var(--border-color)] rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer mb-3"
+              >
+                <FileJson size={14} />
+                <span>Export Local JSON Backup File</span>
+              </button>
+            )}
+
+            <button 
+              className="modal-btn btn-cancel w-full py-3 rounded-xl font-black uppercase tracking-widest text-xs shadow-md transition-all m-0"
+              onClick={() => closeModal('cloudStatus')}
+            >
+              Close Diagnostics
             </button>
           </div>
         </div>

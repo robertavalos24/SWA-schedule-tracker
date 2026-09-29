@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Share2, LogIn, LogOut, Database, Download, Upload } from 'lucide-react';
+import { Share2, LogIn, LogOut, Database, Download, Upload, Cloud } from 'lucide-react';
 import { ThemeType } from '../types';
 import { User } from 'firebase/auth';
+import { useModalStore } from '../store/useModalStore';
+import { PWAInstallPrompt } from './PWAInstallPrompt';
 
 interface HeaderProps {
   theme: ThemeType;
@@ -28,6 +30,7 @@ const themeIcons: Record<ThemeType, string> = {
 const themes: ThemeType[] = ['light', 'dark', 'ocean', 'sunset', 'forest'];
 
 export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings, openGuide, isLocked, user, login, logout, backupToSheets, forceSyncToCloud, pullFromCloud }) => {
+  const { openModal } = useModalStore();
   const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -49,8 +52,8 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
   const handleShare = async () => {
     const url = window.location.href;
     const shareData = {
-      title: 'LUVSchedule — SWA Schedule & Attendance',
-      text: `Check out my LUVSchedule SWA Attendance & Pay Tracker`,
+      title: 'LUV TRACKER — SWA Schedule & Attendance',
+      text: `Check out my LUV TRACKER SWA Attendance & Pay Tracker`,
       url: url,
     };
 
@@ -63,8 +66,8 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
         }
       }
     } else {
-      const subject = encodeURIComponent(`Check out LUVSchedule — SWA Schedule & Attendance`);
-      const body = encodeURIComponent(`Hey, check out this LUVSchedule SWA Attendance & Pay tracker I'm using: ${url}`);
+      const subject = encodeURIComponent(`Check out LUV TRACKER — SWA Schedule & Attendance`);
+      const body = encodeURIComponent(`Hey, check out this LUV TRACKER SWA Attendance & Pay tracker I'm using: ${url}`);
       window.location.href = `mailto:?subject=${subject}&body=${body}`;
     }
   };
@@ -90,7 +93,7 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
           </div>
           <div className="flex flex-col">
             <span className="font-extrabold text-sm sm:text-lg tracking-tight italic flex items-center gap-1.5">
-              LUVSchedule
+              LUV TRACKER
               <span className="hidden xs:inline text-[10px] sm:text-xs font-semibold not-italic px-1.5 py-0.5 rounded-full bg-white/15 border border-white/25">2.0</span>
             </span>
             <span className="text-[10px] sm:text-[11px] text-white/70 font-medium tracking-wide hidden sm:block">SWA Attendance & Pay Portal</span>
@@ -104,8 +107,8 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
             <div className="flex items-center gap-1 sm:gap-1.5 bg-white/10 p-1 rounded-xl border border-white/15">
               <button 
                 className="bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 rounded-lg px-2 sm:px-2.5 py-1 text-[11px] font-bold hover:bg-emerald-500/30 transition-all flex items-center gap-1.5 cursor-pointer"
-                onClick={logout}
-                title={`Signed in as ${user.email}. Click to sign out.`}
+                onClick={() => openModal('cloudStatus')}
+                title={`Signed in as ${user.email}. Click for Cloud & Firebase Diagnostics.`}
               >
                 {user.photoURL ? (
                   <img src={user.photoURL} alt="Profile" className="w-3.5 h-3.5 rounded-full" />
@@ -132,16 +135,33 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
                 <Upload size={12} />
                 <span className="hidden lg:inline">Push</span>
               </button>
+
+              <button
+                className="text-white/70 hover:text-white hover:bg-white/15 rounded-lg p-1 text-[11px] transition-all cursor-pointer"
+                onClick={logout}
+                title="Sign out of Firebase account"
+              >
+                <LogOut size={13} />
+              </button>
             </div>
           ) : (
-            <button 
-              className="bg-white/15 hover:bg-white/25 border border-white/20 text-white rounded-xl px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
-              onClick={login}
-              title="Sign in to sync your schedule across devices"
-            >
-              <LogIn size={13} />
-              <span>Sync Cloud</span>
-            </button>
+            <div className="flex items-center gap-1">
+              <button 
+                className="bg-white/15 hover:bg-white/25 border border-white/20 text-white rounded-xl px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+                onClick={login}
+                title="Sign in to sync your schedule across devices"
+              >
+                <LogIn size={13} />
+                <span>Sync Cloud</span>
+              </button>
+              <button
+                className="bg-white/10 hover:bg-white/20 border border-white/20 text-white rounded-xl p-1.5 sm:p-2 text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
+                onClick={() => openModal('cloudStatus')}
+                title="Firebase & Cloud Diagnostics"
+              >
+                <Cloud size={13} />
+              </button>
+            </div>
           )}
 
           {/* Backup to Sheets Button */}
@@ -153,6 +173,9 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
             <Database size={13} />
             <span className="hidden xl:inline">Google Sheets</span>
           </button>
+
+          {/* PWA Install Button */}
+          <PWAInstallPrompt variant="button" />
 
           {/* Share Button */}
           <button 
