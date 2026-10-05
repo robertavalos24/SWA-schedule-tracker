@@ -15,8 +15,7 @@ export default defineConfig(({mode}) => {
         useCredentials: true,
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         devOptions: {
-          enabled: true,
-          type: 'module'
+          enabled: false,
         },
         workbox: {
           maximumFileSizeToCacheInBytes: 5000000,

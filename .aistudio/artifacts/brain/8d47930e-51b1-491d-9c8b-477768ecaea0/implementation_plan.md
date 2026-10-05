@@ -1,65 +1,87 @@
-# Mobile Workflow Polish: Overview Collapse, Attendance Metrics, and Quick Menu Modals
+# User Data Isolation & Secure Guest State
 
-Resolves mobile layout and navigation issues in LUV TRACKER: adds a single toggle to collapse Settings and Stats above the Calendar on mobile, replaces blank Hours and Est Pay with Attendance Points and Next Drop Date in the compact stat ribbon, and fixes the FMLA and Pay Tables quick buttons in the bottom menu.
+Ensure personal salary figures, pay raise history, and shift logs are strictly isolated to authenticated user accounts, guaranteeing that private browsing tabs, unauthenticated launches, and guest sessions start with clean blank templates without leaking previous user data.
 
-## Confirmed User Decisions
+### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following architectural decisions were selected:
-> - **Collapsed Stat Ribbon Metrics**: Replace the blank Hours and Est Pay with **Attendance Points** and **Next Drop Date** (alongside Status and Avail PTO).
-> - **Pay Tables Quick Button**: Connect the button in the bottom menu to **Pay Change History & Step Scales** (`openModal('payHistory')`).
-> - **FMLA & Cases Quick Button**: Connect the button in the bottom menu to **FMLA Manager** (`openModal('fmlaManager')`).
-> - **Top Panel Collapsing**: Add a **Single Toggle** to collapse Settings Bar and Stats Dashboard above the Calendar on mobile, allowing full-screen focus on the monthly schedule.
+> **Confirmed Choices from Phase 1 Discovery**:
+> - **Default Salary & Pay History for Guest / New Launch**: Clean blank values requiring explicit user entry or sign-in (no hardcoded salary or past personal pay raises).
+> - **Session & Storage Isolation**: Strict partition between authenticated user accounts and guest sessions. Guests receive an unpopulated template, while authenticated users load and persist their data exclusively under their verified Firebase UID (`users/{uid}`).
+
+- **Confirmed Decision 1**: Remove all hardcoded personal salaries (`$89,582.90`, `$60,000.00`, etc.) and pay raise records from `defaultSettings` in the application code.
+- **Confirmed Decision 2**: Scoped Local Storage & Clean Logout: Prefix cached keys with the authenticated user's UID (`swa_${uid}_...`), and immediately wipe in-memory state back to the clean blank template on logout or guest initialization.
 
 ---
 
-## 1. Overview & Root Cause Analysis
+### 1. Overview & Core Concept
 
-1. **Broken Bottom Menu Quick Buttons**: In `MobileBottomNav.tsx`, the menu buttons dispatched `onOpenModal('fmlaSummary')` and `onOpenModal('payTable')`. Neither ID existed in `useModalStore`, causing silent failure. The app's actual registered modals are `fmlaManager` and `payHistory`.
-2. **Blank "Hours" and "Est Pay" in Mobile Ribbon**: The compact mobile ribbon in `Dashboard.tsx` accessed `stats.workedHrs` and `stats.estimatedGrossPay`, which were not exported by the monthly calculation engine. Per user preference, these will be replaced with real-time **Attendance Points** and **Next Drop Date**, providing high-value attendance tracking for Southwest Airlines crew members.
-3. **Mobile Screen Crowding**: On phones, the Settings Bar and Dashboard push the Calendar view down the screen. Adding a dedicated single toggle will collapse both panels into a clean strip, giving 100% viewport prominence directly to the interactive calendar.
-
----
-
-## 2. Implementation Steps
-
-### Phase 1: Fix Bottom Menu Quick Buttons (`src/components/MobileBottomNav.tsx`)
-- Update the **FMLA & Cases** button handler:
-  - Change `onOpenModal('fmlaSummary')` $\longrightarrow$ `onOpenModal('fmlaManager')`.
-- Update the **Pay Tables** button handler:
-  - Change `onOpenModal('payTable')` $\longrightarrow$ `onOpenModal('payHistory')`.
-- In the Mobile Drawer's mini stats preview, harmonize metrics to reflect active worked hours (`totalHrsWorked`) and attendance points cleanly.
-
-### Phase 2: Update Mobile Compact Stat Ribbon (`src/components/Dashboard.tsx`)
-- Replace the first two slots (`Hours` and `Est. Pay`) in the 4-column mobile ribbon:
-  1. **Points**: Display `stats.unptoHrs || 0` with point badge/indicator.
-  2. **Next Drop Date**: Display `stats.dropDateText !== 'N/A' ? stats.dropDateText : 'None'` with days countdown (`${attDays}d`).
-  3. **Status**: Display `stats.attLetter || 'Clean'` with corresponding status color.
-  4. **Avail PTO**: Display `${formatPto(stats.ptoEnd || 0)}h`.
-
-### Phase 3: Single Mobile Overview Collapse Toggle (`src/App.tsx`)
-- Introduce a persistent mobile state `isMobileOverviewCollapsed` backed by `localStorage` (`swa_mobileOverviewCollapsed`).
-- Place a clean, responsive mobile toggle bar directly under the header / PWA banner:
-  - Displays: **"Collapse Overview (Focus on Calendar)"** / **"Show Overview (Settings & Stats)"**.
-- Conditionally apply responsive classes:
-  - When collapsed on mobile: `SettingsBar` and `Dashboard` are hidden on small screens (`hidden sm:block`) while remaining completely visible on desktop.
-  - When expanded on mobile: smoothly displays Settings and Stats cards.
-- The Calendar and Month Controls remain immediately accessible at the top of the mobile viewport.
-
-### Phase 4: Build Verification & Testing
-- Run `compile_applet` and `lint_applet` to confirm zero TypeScript warnings or regressions.
-- Verify modal triggers, collapse state toggling, and stat ribbon rendering.
+- **What It Does**: Enforces strict user isolation across all storage and display layers. When anyone launches the application in a private window, incognito tab, or unauthenticated session, the app presents a clean, neutral template with blank salary fields and empty history. Only upon signing into an authorized Google/Firebase account will that user's personal salary, historical adjustments, shift logs, and settings load from their private Firestore document.
+- **Target Audience / Persona**: Airline crew members and shift schedulers sharing devices, testing in incognito/private windows, or demonstrating shift tracking tools to colleagues without exposing personal wage data.
+- **Key Value**: Guarantees zero wage leakage across devices, browser tabs, or guest launches.
 
 ---
 
-## 3. Verification Plan
+### 2. User Experience & Visual Design
 
-### Automated Checks
-- `compile_applet`: Verify successful Vite build and bundle output.
-- `lint_applet`: Ensure strict TypeScript and ESLint compliance across modified components.
+- **Key User Flows**:
+  1. *Unauthenticated / Private Launch*: User opens app in a private tab. Paycheck summary and salary settings show clean blank placeholders (e.g. `$0.00` / `Enter base salary` / `No history logged`). A clear prompt invites them to log in with Google to retrieve their saved profile or enter their own values.
+  2. *Sign In Flow*: Clicking "Sign In with Google" retrieves the user's private document (`users/{uid}`). All personal wages, custom rules, FMLA cases, and logs seamlessly populate with a subtle save indicator.
+  3. *Sign Out Flow*: Clicking "Sign Out" completely purges sensitive session data from memory and UI, returning the dashboard to the blank guest zero-state without reloading or leaving lingering values.
+- **Visual Identity & Clean State**:
+  - Empty wage metric displays use soft tabular styling (`$0.00`) and quiet placeholders rather than broken errors.
+  - Pay History modal displays an inviting empty state illustration/banner: *"No pay adjustments recorded yet. Add your first merit raise or promotion."*
+  - Censorship shielding toggle remains readily accessible for in-person sharing.
 
-### Functional Verification
-- Tap **FMLA & Cases** from the bottom menu $\longrightarrow$ verifies `fmlaManager` modal opens smoothly.
-- Tap **Pay Tables** from the bottom menu $\longrightarrow$ verifies `payHistory` modal (Pay Change History & Step Scales) opens smoothly.
-- Tap the **Mobile Overview Toggle** $\longrightarrow$ verifies Settings Bar and Stats collapse, bringing the Calendar directly to the top.
-- Verify the compact mobile ribbon displays **Points**, **Next Drop Date**, **Status**, and **Avail PTO** with no blank fields.
+---
+
+### 3. Key Product Decisions & Trade-Offs
+
+- **Decision 1: Elimination of Embedded Personal Seeds**
+  - *Chosen Approach*: Replace hardcoded `$89k` / `$60k` pay history arrays with an empty array `[]` and blank salary `''` in `defaultSettings`.
+  - *Why*: Hardcoded defaults in code ship to every client bundle and appear whenever storage is cold or private. Clean defaults preserve privacy by design.
+- **Decision 2: User-Scoped Local Caching (`swa_${uid}_*`)**
+  - *Chosen Approach*: When a user is signed in, local storage keys are namespaced with their UID. Unauthenticated guest actions remain in temporary session keys that do not overwrite or cross-contaminate user profiles.
+  - *Why*: Prevents browser cross-contamination if multiple users sign in from the same machine or if a guest uses the device after an employee.
+- **Decision 3: Complete Logout Memory Purge**
+  - *Chosen Approach*: The `logout` handler actively clears React state back to `defaultSettings` and wipes active user cache keys.
+  - *Why*: Prevents stale in-memory state from remaining visible after authentication terminates.
+
+---
+
+### 4. Technical Architecture & Data Strategy
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       Client Browser                        │
+│                                                             │
+│   ┌──────────────────────────┐   ┌──────────────────────┐   │
+│   │  Guest / Private Launch  │   │  Authenticated User  │   │
+│   │   (No Auth Token / UID)  │   │     (Firebase UID)   │   │
+│   └─────────────┬────────────┘   └──────────┬───────────┘   │
+│                 │                           │               │
+│                 ▼                           ▼               │
+│       ┌───────────────────┐       ┌───────────────────┐     │
+│       │  defaultSettings  │       │ Scoped User Cache │     │
+│       │   (Blank Wages,   │       │  (swa_${uid}_*)   │     │
+│       │   Empty History)  │       └─────────┬─────────┘     │
+│       └───────────────────┘                 │               │
+└─────────────────────────────────────────────┼───────────────┘
+                                              │ Firestore Sync
+                                              ▼
+                             ┌─────────────────────────────────┐
+                             │       Firestore Database        │
+                             │      /users/{uid} Document      │
+                             │  - settings (salary, raises)    │
+                             │  - logs (shifts, time off)      │
+                             │  - midCounts, fmlaCases         │
+                             └─────────────────────────────────┘
+```
+
+- **State Reset Logic (`useScheduleData.ts`)**:
+  - Set `salary: ''` and `payHistory: []` in `defaultSettings`.
+  - When `user` transitions to `null` (logout), trigger `resetToDefaults()`.
+  - When `user` transitions from `null` to `User` (login), load user-namespaced storage or fetch Firestore document `users/${user.uid}`.
+- **Security Invariants**:
+  - `firestore.rules` already enforces `request.auth.uid == userId` for `/users/{userId}`.
+  - No client payload from an unauthenticated user can overwrite an existing user's cloud document.

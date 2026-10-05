@@ -4,7 +4,12 @@ export async function getOrCreateBackupSpreadsheet(accessToken: string): Promise
   const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  if (!searchRes.ok) throw new Error('Failed to search Drive');
+  if (!searchRes.ok) {
+    if (searchRes.status === 401) {
+      throw new Error('401_UNAUTHORIZED');
+    }
+    throw new Error('Failed to search Drive: ' + searchRes.statusText);
+  }
   
   const searchData = await searchRes.json();
   if (searchData.files && searchData.files.length > 0) {
@@ -31,7 +36,12 @@ export async function getOrCreateBackupSpreadsheet(accessToken: string): Promise
     })
   });
   
-  if (!createRes.ok) throw new Error('Failed to create Spreadsheet');
+  if (!createRes.ok) {
+    if (createRes.status === 401) {
+      throw new Error('401_UNAUTHORIZED');
+    }
+    throw new Error('Failed to create Spreadsheet: ' + createRes.statusText);
+  }
   
   const createData = await createRes.json();
   return createData.spreadsheetId;
@@ -109,6 +119,9 @@ export async function writeBackupToSheets(
   });
 
   if (!batchRes.ok) {
+    if (batchRes.status === 401) {
+      throw new Error('401_UNAUTHORIZED');
+    }
     const err = await batchRes.text();
     throw new Error('Failed to update spreadsheet: ' + err);
   }
@@ -119,7 +132,12 @@ export async function readBackupFromSheets(accessToken: string, spreadsheetId: s
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   
-  if (!res.ok) throw new Error('Failed to read from spreadsheet');
+  if (!res.ok) {
+    if (res.status === 401) {
+      throw new Error('401_UNAUTHORIZED');
+    }
+    throw new Error('Failed to read from spreadsheet');
+  }
   const data = await res.json();
   if (data.values && data.values[0] && data.values[0][0]) {
     return JSON.parse(data.values[0][0]);

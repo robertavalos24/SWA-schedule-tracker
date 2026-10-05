@@ -492,20 +492,30 @@ export const getBalancesAtStartOfDate = (targetDs: string, logs: LogsState, sett
         if (!isNaN(customCap)) effectiveTier.c = customCap;
       }
       
-      // Accruals on the 1st
+      // Accruals and resets on the 1st
       if (cd === 1) {
-        if (asOfStr && current.getTime() !== asOf.getTime() && current >= asOf) {
-          let prevM = cm - 1;
-          let prevY = cy;
-          if (prevM < 0) {
-            prevM = 11;
-            prevY--;
+        const isAfterOrAtAsOf = !asOfStr || current >= asOf;
+        if (isAfterOrAtAsOf) {
+          if (!asOfStr || current.getTime() !== asOf.getTime()) {
+            let prevM = cm - 1;
+            let prevY = cy;
+            if (prevM < 0) {
+              prevM = 11;
+              prevY--;
+            }
+            const canAccrue = shouldAccrueInMonth(prevY, prevM, logs);
+            if (canAccrue) {
+              ptoBal += effectiveTier.a; 
+            }
           }
-          const canAccrue = shouldAccrueInMonth(prevY, prevM, logs);
-          if (canAccrue) {
-            ptoBal += effectiveTier.a; 
+          
+          // Holiday days do not roll over from year to year; restart in January
+          if (cm === 0) {
+            holBal = 0;
           }
-          if (cm <= 9) holBal += 8; // Jan-Oct
+          if (cm <= 9) {
+            holBal += 8; // Jan-Oct accrual (1 day / month)
+          }
         }
       }
       
@@ -552,7 +562,9 @@ export const getBalancesAtStartOfDate = (targetDs: string, logs: LogsState, sett
     if (activeCache) {
       const nextCy = current.getFullYear(), nextCm = current.getMonth(), nextCd = current.getDate();
       const nextDs = `${nextCy}-${String(nextCm+1).padStart(2,'0')}-${String(nextCd).padStart(2,'0')}`;
-      activeCache[nextDs] = { pto: ptoBal, hol: holBal };
+      // At start of Jan 1st, prior year HOL does not roll over (restarts in January)
+      const cachedHol = (nextCm === 0 && nextCd === 1) ? 0 : holBal;
+      activeCache[nextDs] = { pto: ptoBal, hol: cachedHol };
     }
   }
 
@@ -571,16 +583,23 @@ export const getBalancesAtStartOfDate = (targetDs: string, logs: LogsState, sett
     }
     
     if (tCd === 1) {
-      if (asOfStr && target.getTime() !== asOf.getTime() && target >= asOf) {
-        let prevM = tCm - 1;
-        let prevY = tCy;
-        if (prevM < 0) {
-          prevM = 11;
-          prevY--;
+      const isAfterOrAtAsOf = !asOfStr || target >= asOf;
+      if (isAfterOrAtAsOf) {
+        if (!asOfStr || target.getTime() !== asOf.getTime()) {
+          let prevM = tCm - 1;
+          let prevY = tCy;
+          if (prevM < 0) {
+            prevM = 11;
+            prevY--;
+          }
+          const canAccrue = shouldAccrueInMonth(prevY, prevM, logs);
+          if (canAccrue) {
+            ptoBal += effTargetTier.a;
+          }
         }
-        const canAccrue = shouldAccrueInMonth(prevY, prevM, logs);
-        if (canAccrue) {
-          ptoBal += effTargetTier.a;
+        // Holiday days do not roll over from year to year; restart in January
+        if (tCm === 0) {
+          holBal = 0;
         }
         if (tCm <= 9) holBal += 8;
       }
@@ -590,6 +609,12 @@ export const getBalancesAtStartOfDate = (targetDs: string, logs: LogsState, sett
     }
     if (ptoBal > effTargetTier.c) {
       ptoBal = effTargetTier.c;
+    }
+  } else {
+    // If target is January 1st and we didn't include target day accrual,
+    // holiday days from the prior year do not roll over into January.
+    if (target.getMonth() === 0 && target.getDate() === 1) {
+      holBal = 0;
     }
   }
   
@@ -707,8 +732,12 @@ export const calculatePay = (y: number, m: number, day: number, logs: LogsState,
         if (canAccrue) {
           currentPto += effTier.a;
         }
-        if (cm <= 9) currentHol += 8;
       }
+      // Holiday days do not roll over from year to year; restart in January
+      if (cm === 0) {
+        currentHol = 0;
+      }
+      if (cm <= 9) currentHol += 8;
       if (currentPto > effTier.c) currentPto = effTier.c;
     }
 
@@ -1315,16 +1344,23 @@ export const calculate = (y: number, m: number, logs: LogsState, midCounts: MidC
     }
 
     if (cd === 1) { 
-      if (asOfStr && ds !== asOfStr && current >= new Date(asOfStr + "T00:00:00")) {
-        let prevM = cm - 1;
-        let prevY = cy;
-        if (prevM < 0) {
-          prevM = 11;
-          prevY--;
+      const isAfterOrAtAsOf = !asOfStr || current >= new Date(asOfStr + "T00:00:00");
+      if (isAfterOrAtAsOf) {
+        if (!asOfStr || ds !== asOfStr) {
+          let prevM = cm - 1;
+          let prevY = cy;
+          if (prevM < 0) {
+            prevM = 11;
+            prevY--;
+          }
+          const canAccrue = shouldAccrueInMonth(prevY, prevM, logs);
+          if (canAccrue) {
+            ptoEnd += effectiveTier.a;
+          }
         }
-        const canAccrue = shouldAccrueInMonth(prevY, prevM, logs);
-        if (canAccrue) {
-          ptoEnd += effectiveTier.a;
+        // Holiday days do not roll over from year to year; restart in January
+        if (cm === 0) {
+          holEnd = 0;
         }
         if (cm <= 9) holEnd += 8;
       }
@@ -1482,18 +1518,24 @@ export const getRollingYearStats = (y: number, m: number, logs: LogsState, setti
       pto = parseFloat(settings.correctionStartPto) || 0;
     }
 
-    if (cd === 1 && ds !== asOfStr) { 
+    if (cd === 1) { 
       const isAfterAsOf = !asOfStr || ds >= asOfStr;
       if (isAfterAsOf) {
-        let prevM = cm - 1;
-        let prevY = cy;
-        if (prevM < 0) {
-          prevM = 11;
-          prevY--;
+        if (!asOfStr || ds !== asOfStr) {
+          let prevM = cm - 1;
+          let prevY = cy;
+          if (prevM < 0) {
+            prevM = 11;
+            prevY--;
+          }
+          const canAccrue = shouldAccrueInMonth(prevY, prevM, logs);
+          if (canAccrue) {
+            pto += effectiveTier.a;
+          }
         }
-        const canAccrue = shouldAccrueInMonth(prevY, prevM, logs);
-        if (canAccrue) {
-          pto += effectiveTier.a;
+        // Holiday days do not roll over from year to year; restart in January
+        if (cm === 0) {
+          hol = 0;
         }
         if (cm <= 9) hol += 8;
       }

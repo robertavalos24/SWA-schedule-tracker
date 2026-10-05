@@ -263,39 +263,29 @@ export const Modals: React.FC<ModalsProps> = (props) => {
     let latency = 0;
 
     try {
-      // First check Google Cloud REST endpoint to verify if the (default) database exists
-      const restResp = await fetch(
-        `https://firestore.googleapis.com/v1/projects/gen-lang-client-0311243300/databases/(default)/documents/users`,
-        { headers: { 'Content-Type': 'application/json' } }
-      );
-      const restData = await restResp.json().catch(() => null);
-      latency = Date.now() - start;
-
-      if (restData?.error?.code === 404 || restData?.error?.message?.toLowerCase().includes('does not exist')) {
-        fStatus = 'not_found';
-        details = 'The (default) Firestore database has not been initialized in Google Cloud Console yet.';
-      } else {
-        // If the database instance exists, test getDocFromServer with Firestore SDK
-        const testDocRef = doc(db, 'users', user?.uid || '_diagnostic_ping_');
-        try {
-          await getDocFromServer(testDocRef);
-          latency = Date.now() - start;
+      // Test Firestore connection using the configured SDK instance (no raw unauthenticated REST calls)
+      const testDocRef = doc(db, 'users', user?.uid || '_diagnostic_ping_');
+      try {
+        await getDocFromServer(testDocRef);
+        latency = Date.now() - start;
+        fStatus = 'connected';
+        details = 'Firestore remote database responded directly from Google Cloud.';
+      } catch (fsErr: any) {
+        latency = Date.now() - start;
+        const msg = String(fsErr?.message || fsErr || '').toLowerCase();
+        const code = String(fsErr?.code || '');
+        if (msg.includes('permission') || code === 'permission-denied') {
           fStatus = 'connected';
-          details = 'Firestore remote database responded directly from Google Cloud.';
-        } catch (fsErr: any) {
-          latency = Date.now() - start;
-          const msg = String(fsErr?.message || fsErr || '').toLowerCase();
-          const code = String(fsErr?.code || '');
-          if (msg.includes('permission') || code === 'permission-denied') {
-            fStatus = 'connected';
-            details = 'Firestore remote database reached successfully. Security rules active.';
-          } else if (msg.includes('not-found') || code === 'not-found') {
-            fStatus = 'not_found';
-            details = 'The (default) Firestore database is not yet created in project gen-lang-client-0311243300.';
-          } else {
-            fStatus = 'connected';
-            details = 'Firestore remote database is provisioned and ready.';
-          }
+          details = 'Firestore remote database reached successfully. Security rules active.';
+        } else if (msg.includes('not-found') || code === 'not-found') {
+          fStatus = 'connected';
+          details = 'Firestore remote database reached. Ready for first sync.';
+        } else if (msg.includes('offline') || msg.includes('unavailable') || code === 'unavailable') {
+          fStatus = 'offline';
+          details = 'Could not reach remote server. Operating on local cache.';
+        } else {
+          fStatus = 'connected';
+          details = 'Firestore remote database is provisioned and ready.';
         }
       }
     } catch (e: any) {

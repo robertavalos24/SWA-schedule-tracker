@@ -149,6 +149,7 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
           </label>
           <input 
             type="text" 
+            placeholder="$0.00"
             className={`p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-bold focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all ${settings.payHistory && settings.payHistory.length > 0 ? 'opacity-70 cursor-not-allowed' : ''}`}
             value={tempBaseSalary !== undefined ? tempBaseSalary : baseSalary}
             readOnly={!!(settings.payHistory && settings.payHistory.length > 0)}
@@ -218,6 +219,7 @@ export const SettingsBar: React.FC<SettingsBarProps> = ({
           </label>
           <input 
             type="text" 
+            placeholder="$0.00"
             className={`p-1.5 sm:p-2 border border-[var(--border-color)] rounded-lg text-xs w-full box-border bg-[var(--input-bg)] text-[var(--text-main)] font-black text-center focus:outline-none focus:ring-2 focus:ring-[var(--swa-blue)]/20 transition-all ${settings.payHistory && settings.payHistory.length > 0 ? 'opacity-70 cursor-not-allowed' : ''}`}
             value={tempCalculatedSalary !== undefined ? tempCalculatedSalary : calculatedSalary}
             readOnly={!!(settings.payHistory && settings.payHistory.length > 0)}

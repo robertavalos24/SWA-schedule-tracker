@@ -55,7 +55,8 @@ export async function directRestSync(user: User, data: any): Promise<boolean> {
   try {
     const token = await user.getIdToken(true);
     const databaseId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
-    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${databaseId}/documents/users/${user.uid}`;
+    const apiKey = (firebaseConfig as any).apiKey;
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${databaseId}/documents/users/${user.uid}?key=${apiKey}`;
     const fields: Record<string, any> = {};
     for (const [k, v] of Object.entries(data)) {
       if (v !== undefined) {
@@ -66,7 +67,8 @@ export async function directRestSync(user: User, data: any): Promise<boolean> {
       method: 'PATCH',
       headers: {
         'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
       },
       body: JSON.stringify({ fields })
     });
@@ -75,7 +77,7 @@ export async function directRestSync(user: User, data: any): Promise<boolean> {
       return true;
     }
     const errData = await resp.json().catch(() => ({}));
-    console.warn('[Firestore Direct Sync] Cloud REST write response:', resp.status, errData);
+    console.warn('[Firestore Direct Sync] Cloud REST write note:', resp.status, errData);
     return false;
   } catch (err) {
     console.warn('[Firestore Direct Sync] Cloud REST write error:', err);
@@ -87,50 +89,29 @@ export async function directRestPull(user: User): Promise<any | null> {
   try {
     const token = await user.getIdToken(true);
     const databaseId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
-    
-    // Potential URLs to search in order: custom DB by UID, custom DB by email, default DB by UID, default DB by email
-    const candidateUrls: string[] = [
-      `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${databaseId}/documents/users/${user.uid}`
-    ];
-    if (user.email) {
-      candidateUrls.push(`https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${databaseId}/documents/users/${encodeURIComponent(user.email)}`);
-    }
-    if (databaseId !== '(default)') {
-      candidateUrls.push(`https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/users/${user.uid}`);
-      if (user.email) {
-        candidateUrls.push(`https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/users/${encodeURIComponent(user.email)}`);
-      }
-    }
+    const apiKey = (firebaseConfig as any).apiKey;
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${databaseId}/documents/users/${user.uid}?key=${apiKey}`;
 
-    for (const url of candidateUrls) {
-      try {
-        const resp = await fetch(url, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (resp.ok) {
-          const docData = await resp.json();
-          const fields = docData.fields || {};
-          const result: Record<string, any> = {};
-          for (const [k, v] of Object.entries(fields)) {
-            result[k] = fromFirestoreValue(v);
-          }
-          if (Object.keys(result).length > 0) {
-            console.log('[Firestore Direct Pull] Found existing data at:', url);
-            // If pulled from a legacy fallback location, migrate to primary custom DB
-            if (url !== candidateUrls[0]) {
-              console.log('[Firestore Direct Pull] Auto-migrating data to primary custom database.');
-              await directRestSync(user, result);
-            }
-            return result;
-          }
-        }
-      } catch (e) {
-        console.warn('[Firestore Direct Pull] Candidate check error:', url, e);
+    const resp = await fetch(url, {
+      headers: { 
+        'Authorization': `Bearer ${token}`,
+        'X-Goog-Api-Key': apiKey,
+      }
+    });
+    if (resp.ok) {
+      const docData = await resp.json();
+      const fields = docData.fields || {};
+      const result: Record<string, any> = {};
+      for (const [k, v] of Object.entries(fields)) {
+        result[k] = fromFirestoreValue(v);
+      }
+      if (Object.keys(result).length > 0) {
+        return result;
       }
     }
     return null;
   } catch (err) {
-    console.warn('[Firestore Direct Pull] Cloud REST pull error:', err);
+    console.warn('[Firestore Direct Pull] Cloud REST pull note:', err);
     return null;
   }
 }
@@ -281,11 +262,17 @@ export const useFirebaseSync = () => {
 
   const syncToGoogleSheets = async (data: any) => {
     let token = googleAccessToken;
+
+    const executeBackup = async (tok: string) => {
+      const spreadsheetId = await getOrCreateBackupSpreadsheet(tok);
+      await writeBackupToSheets(tok, spreadsheetId, data);
+    };
+
     if (!token) {
       // If no token in memory, request Sheets permission via dedicated provider
       try {
         const res = await googleSignInForSheets();
-        if (res) {
+        if (res?.accessToken) {
           token = res.accessToken;
           setGoogleAccessToken(res.accessToken);
           if (res.user) setUser(res.user);
@@ -298,8 +285,29 @@ export const useFirebaseSync = () => {
         throw new Error('Google Sheets permission required. Please grant access to save backup.');
       }
     }
-    const spreadsheetId = await getOrCreateBackupSpreadsheet(token);
-    await writeBackupToSheets(token, spreadsheetId, data);
+
+    try {
+      await executeBackup(token);
+    } catch (err: any) {
+      const errMsg = String(err?.message || err || '');
+      if (errMsg.includes('401') || errMsg.includes('UNAUTHORIZED')) {
+        console.warn('Google Sheets token expired (401). Refreshing token...');
+        // Clear expired token from state and storage
+        setGoogleAccessToken(null);
+        try { sessionStorage.removeItem('luv_gtoken'); } catch (_) {}
+
+        // Request fresh authorization with sheets scopes
+        const freshRes = await googleSignInForSheets();
+        if (freshRes?.accessToken) {
+          setGoogleAccessToken(freshRes.accessToken);
+          if (freshRes.user) setUser(freshRes.user);
+          await executeBackup(freshRes.accessToken);
+          return;
+        }
+        throw new Error('Google session expired (401). Please click "Google Sheets" again to re-authenticate.');
+      }
+      throw err;
+    }
   };
 
   return { 

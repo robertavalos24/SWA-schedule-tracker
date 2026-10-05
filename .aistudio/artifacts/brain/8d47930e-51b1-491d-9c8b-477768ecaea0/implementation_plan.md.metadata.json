@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan to implement a single toggle to collapse Settings and Stats above the Calendar on mobile, replace blank Hours and Est Pay with Attendance Points and Next Drop Date in the compact stat ribbon, and fix the bottom menu quick buttons for FMLA and Pay Tables.",
-  "updatedAt":  "2026-09-29T00:49:35.808026198Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Implementation plan for User Authentication Data Isolation and Zero-Leak Guest Sessions. Eliminates hardcoded personal salaries and pay history from default templates, scopes local storage to authenticated user IDs, resets in-memory data to a clean blank state on logout or unauthenticated launch, and ensures that sensitive wages and shift logs only persist within a user's verified Firebase account.",
+  "updatedAt": "2026-09-30T07:35:39.349772645Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

@@ -195,8 +195,30 @@ const IOSInstallModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         </div>
 
         {typeof window !== 'undefined' && window.location.hostname.includes('ais-dev-') && (
-          <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 text-[10px] text-amber-800 dark:text-amber-300 leading-normal">
-            <span className="font-bold">Pro Tip:</span> Click <strong>Share</strong> in AI Studio on your desktop to activate your public shared link (<code>ais-pre-...</code>). Adding the shared link to your Home Screen prevents any Google session 401 timeouts!
+          <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-2">
+            <div>
+              <span className="font-bold">⚠️ Avoid 401 Session Timeouts:</span> You are currently viewing the private dev URL. To prevent 401 Unauthorized errors on mobile Safari or after your Google session expires, add the permanent <strong>Shared App URL</strong> to your Home Screen instead.
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <a
+                href={window.location.href.replace('ais-dev-', 'ais-pre-')}
+                target="_top"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition shadow-sm"
+              >
+                Open Shared App (ais-pre-...) ↗
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(window.location.href.replace('ais-dev-', 'ais-pre-'));
+                  alert('Shared App URL copied to clipboard! Open it in Safari or Chrome to install to Home Screen.');
+                }}
+                className="px-2.5 py-1 bg-amber-200 dark:bg-amber-900/60 hover:bg-amber-300 text-amber-950 dark:text-amber-100 rounded-lg text-xs font-bold transition cursor-pointer"
+              >
+                Copy Link
+              </button>
+            </div>
           </div>
         )}
 

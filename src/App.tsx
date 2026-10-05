@@ -27,6 +27,7 @@ import { MobileBottomNav } from './components/MobileBottomNav';
 import { QuickLogSpeedDial } from './components/QuickLogSpeedDial';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
+import { BidLineImportModal } from './components/BidLineImportModal';
 
 export default function App() {
   const {
@@ -97,6 +98,16 @@ export default function App() {
   const [isQuickLogOpen, setIsQuickLogOpen] = useState(false);
   const [quickLogTargetDate, setQuickLogTargetDate] = useState<string>('');
   const isOnline = useOnlineStatus();
+
+  const [dismissDevNotice, setDismissDevNotice] = useState(() => {
+    try {
+      return sessionStorage.getItem('swa_dismiss_dev_notice') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const isDevHost = typeof window !== 'undefined' && window.location.hostname.includes('ais-dev-');
+  const sharedHostUrl = typeof window !== 'undefined' ? window.location.href.replace('ais-dev-', 'ais-pre-') : '';
 
   useEffect(() => {
     const handleOffline = () => {
@@ -1109,6 +1120,12 @@ export default function App() {
             try {
               const data = new Uint8Array(e.target?.result as ArrayBuffer);
               const workbook = XLSX.read(data, {type: 'array'});
+              if (workbook.SheetNames && workbook.SheetNames.length > 1) {
+                openModal('bidLineImport');
+                showToast(`Multi-tab Excel workbook detected (${workbook.SheetNames.length} tabs). Opening Bid Line Importer to select your tab and line.`, 'info');
+                resolve(0);
+                return;
+              }
               const worksheet = workbook.Sheets[workbook.SheetNames[0]];
               const rows: any[] = XLSX.utils.sheet_to_json(worksheet, {header: 1, raw: false});
 
@@ -1507,6 +1524,43 @@ export default function App() {
 
   return (
     <div className={`min-h-screen bg-[var(--bg-grey)] text-[var(--text-main)] font-sans transition-colors duration-300 ${isLocked ? 'is-locked' : ''}`}>
+      {isDevHost && !dismissDevNotice && (
+        <div className="bg-amber-500 text-slate-950 px-3 py-1.5 text-xs font-semibold flex items-center justify-between gap-2 shadow-sm border-b border-amber-600 relative z-50 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="bg-slate-950 text-amber-400 text-[10px] uppercase font-black px-1.5 py-0.5 rounded">Dev Preview URL</span>
+            <span>Experiencing 401 Unauthorized errors on mobile? Open your permanent Shared App link:</span>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <a 
+              href={sharedHostUrl}
+              target="_top"
+              rel="noopener noreferrer"
+              className="bg-slate-950 hover:bg-slate-900 text-white px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1"
+            >
+              Open Shared App ↗
+            </a>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(sharedHostUrl);
+                showToast('Shared App URL copied to clipboard!', 'success');
+              }}
+              className="bg-amber-600/30 hover:bg-amber-600/50 text-slate-950 px-2 py-1 rounded text-[11px] font-bold transition cursor-pointer"
+            >
+              Copy Link
+            </button>
+            <button
+              onClick={() => {
+                setDismissDevNotice(true);
+                try { sessionStorage.setItem('swa_dismiss_dev_notice', 'true'); } catch {}
+              }}
+              className="text-slate-950/70 hover:text-slate-950 p-1 text-xs cursor-pointer ml-1"
+              title="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
       <Header 
         theme={theme}
         toggleTheme={toggleTheme} 
@@ -1689,12 +1743,22 @@ export default function App() {
           triggerClearMonth={triggerClearMonth}
         />
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 mt-6 sm:mt-8 max-w-4xl mx-auto">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5 sm:gap-3 mt-6 sm:mt-8 max-w-5xl mx-auto">
           {!isLocked && (
             <>
               <button 
+                className="flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2.5 bg-[var(--card-bg)] border border-[var(--swa-blue)]/50 text-[var(--swa-blue)] font-bold rounded-xl text-xs transition-all hover:border-[var(--swa-blue)] hover:bg-[var(--swa-blue)]/10 active:scale-95 cursor-pointer shadow-sm" 
+                onClick={() => openModal('bidLineImport')}
+                title="Import specific bid line from multi-tab Excel worksheet (.xlsx)"
+              >
+                <FileSpreadsheet size={14} className="flex-shrink-0" />
+                <span className="truncate">Bid Line (.xlsx)</span>
+              </button>
+
+              <button 
                 className="flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2.5 bg-[var(--card-bg)] border border-[var(--border-color)] text-[var(--pay-green)] font-bold rounded-xl text-xs transition-all hover:border-[var(--pay-green)] hover:bg-[var(--hover-bg)] active:scale-95 cursor-pointer shadow-sm" 
                 onClick={() => fileInputRef.current?.click()}
+                title="Upload RosterApps calendar report"
               >
                 <Upload size={14} className="flex-shrink-0" />
                 <span className="truncate">Smart Import</span>
@@ -1897,6 +1961,21 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Bid Line Excel Importer Modal */}
+      <BidLineImportModal
+        isOpen={!!modalsState.bidLineImport}
+        onClose={() => closeModal('bidLineImport')}
+        logs={logs}
+        onImportLogs={(newLogs, targetMonth, targetYear, msg) => {
+          updateLogs(newLogs);
+          setViewMonth(targetMonth);
+          setViewYear(targetYear);
+          showToast(msg, 'success');
+        }}
+        viewMonth={viewMonth}
+        viewYear={viewYear}
+      />
 
       <Modals 
         user={user}

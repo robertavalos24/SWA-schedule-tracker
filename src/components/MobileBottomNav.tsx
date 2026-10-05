@@ -308,6 +308,18 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               <button
                 onClick={() => {
                   setActiveSheet(null);
+                  onOpenModal('bidLineImport');
+                }}
+                className="p-3 rounded-2xl bg-[var(--sub-bg)] border border-[var(--border-color)] text-left hover:bg-[var(--hover-bg)] active:scale-95 transition"
+              >
+                <FileSpreadsheet size={16} className="text-[var(--swa-blue)] mb-1" />
+                <div className="text-xs font-bold text-[var(--text-main)]">Bid Line (.xlsx)</div>
+                <div className="text-[10px] text-[var(--text-muted)]">Select Tab & Line</div>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveSheet(null);
                   onOpenSettings();
                 }}
                 className="p-3 rounded-2xl bg-[var(--sub-bg)] border border-[var(--border-color)] text-left hover:bg-[var(--hover-bg)] active:scale-95 transition"
