@@ -1,21 +1,14 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    function isOwner(userId) {
-      return isAuthenticated() && (request.auth.uid == userId || request.auth.token.email == userId || request.auth.token.email == 'robertavalos24@gmail.com');
-    }
-
+    // Each user can only read and write their own document and anything inside it
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
-    }
+      allow read, write: if request.auth != null && request.auth.uid == userId;
 
-    match /{document=**} {
-      allow read, write: if isAuthenticated();
+      match /{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
     }
   }
 }
-
-
