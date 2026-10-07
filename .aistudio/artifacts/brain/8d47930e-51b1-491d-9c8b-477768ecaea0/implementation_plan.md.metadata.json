@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for User Authentication Data Isolation and Zero-Leak Guest Sessions. Eliminates hardcoded personal salaries and pay history from default templates, scopes local storage to authenticated user IDs, resets in-memory data to a clean blank state on logout or unauthenticated launch, and ensures that sensitive wages and shift logs only persist within a user's verified Firebase account.",
-  "updatedAt": "2026-09-30T07:35:39.349772645Z",
-  "requestFeedback": true,
-  "userFacing": true
+  "summary":  "Implementation plan for authoritative Firestore cloud synchronization and instant shift deletion sync. Outlines the root cause of resurrecting deleted shifts due to Firestore recursive map merging, and provides the architectural solution: atomic logs field replacement via mergeFields and true document overwrite on manual Push.",
+  "updatedAt":  "2026-10-05T03:59:32.540138068Z",
+  "requestFeedback":  true,
+  "userFacing":  true
 }

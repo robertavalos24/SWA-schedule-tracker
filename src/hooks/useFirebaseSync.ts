@@ -51,12 +51,21 @@ export function fromFirestoreValue(valObj: any): any {
   return null;
 }
 
-export async function directRestSync(user: User, data: any): Promise<boolean> {
+export async function directRestSync(user: User, data: any, isAuthoritative = false): Promise<boolean> {
   try {
     const token = await user.getIdToken(true);
     const databaseId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
     const apiKey = (firebaseConfig as any).apiKey;
-    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${databaseId}/documents/users/${user.uid}?key=${apiKey}`;
+    let url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${databaseId}/documents/users/${user.uid}?key=${apiKey}`;
+    
+    // When updating specific top-level fields (e.g. { logs }), specify updateMask.fieldPaths
+    // so Firestore REST replaces the field entirely rather than recursively merging nested map keys
+    const topKeys = Object.keys(data).filter(k => data[k] !== undefined);
+    if (topKeys.length > 0) {
+      const maskParams = topKeys.map(k => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&');
+      url += `&${maskParams}`;
+    }
+
     const fields: Record<string, any> = {};
     for (const [k, v] of Object.entries(data)) {
       if (v !== undefined) {
@@ -221,7 +230,7 @@ export const useFirebaseSync = () => {
     setGoogleAccessToken(null);
   };
 
-  const syncToFirebase = useCallback(async (data: any): Promise<boolean> => {
+  const syncToFirebase = useCallback(async (data: any, isAuthoritative = false): Promise<boolean> => {
     const activeUser = auth.currentUser || user;
     if (!activeUser) {
       throw new Error('Please sign in with Google to push to cloud.');
@@ -237,7 +246,19 @@ export const useFirebaseSync = () => {
 
       // Remove any undefined values which Firestore rejects
       const sanitizedData = JSON.parse(JSON.stringify(data));
-      await setDoc(doc(db, 'users', activeUser.uid), sanitizedData, { merge: true });
+      const docRef = doc(db, 'users', activeUser.uid);
+
+      if (isAuthoritative) {
+        // Complete authoritative overwrite: whatever is locally active replaces the remote document entirely
+        await setDoc(docRef, sanitizedData);
+      } else {
+        // When updating specific top-level fields (e.g. { logs: processedLogs }),
+        // using mergeFields replaces each specified field (like 'logs') in full,
+        // rather than recursively merging keys inside 'logs'.
+        // This ensures deleted dates/shifts are actually deleted from the cloud database!
+        const topLevelKeys = Object.keys(sanitizedData);
+        await setDoc(docRef, sanitizedData, { mergeFields: topLevelKeys });
+      }
       return true;
     } catch (e: any) {
       console.warn('Firestore SDK sync error, attempting direct Cloud REST fallback...', e);
@@ -245,7 +266,7 @@ export const useFirebaseSync = () => {
       // Attempt token force-refresh with direct Cloud REST fallback
       try {
         const sanitizedData = JSON.parse(JSON.stringify(data));
-        const restOk = await directRestSync(activeUser, sanitizedData);
+        const restOk = await directRestSync(activeUser, sanitizedData, isAuthoritative);
         if (restOk) {
           return true;
         }

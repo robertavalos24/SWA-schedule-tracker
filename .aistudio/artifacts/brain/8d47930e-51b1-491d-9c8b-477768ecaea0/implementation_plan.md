@@ -1,87 +1,91 @@
-# User Data Isolation & Secure Guest State
+# Authoritative Cloud Overwrite & Instant Shift Deletion Sync
 
-Ensure personal salary figures, pay raise history, and shift logs are strictly isolated to authenticated user accounts, guaranteeing that private browsing tabs, unauthenticated launches, and guest sessions start with clean blank templates without leaking previous user data.
+A permanent fix for deleted calendar shifts reappearing upon cloud synchronization. Replaces recursive Firestore map-merging with atomic field replacement on auto-sync and an authoritative document overwrite on manual "Push".
 
 ### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> **Confirmed Choices from Phase 1 Discovery**:
-> - **Default Salary & Pay History for Guest / New Launch**: Clean blank values requiring explicit user entry or sign-in (no hardcoded salary or past personal pay raises).
-> - **Session & Storage Isolation**: Strict partition between authenticated user accounts and guest sessions. Guests receive an unpopulated template, while authenticated users load and persist their data exclusively under their verified Firebase UID (`users/{uid}`).
-
-- **Confirmed Decision 1**: Remove all hardcoded personal salaries (`$89,582.90`, `$60,000.00`, etc.) and pay raise records from `defaultSettings` in the application code.
-- **Confirmed Decision 2**: Scoped Local Storage & Clean Logout: Prefix cached keys with the authenticated user's UID (`swa_${uid}_...`), and immediately wipe in-memory state back to the clean blank template on logout or guest initialization.
+> **Confirmed Decision**: The user chose **"Authoritative Push and instant delete sync"**.
+> - Shifts deleted on the calendar (such as a tentative overtime/double-time shift) will be immediately removed from the Firestore cloud database rather than revived by background merge listeners.
+> - The **"Push"** button will perform an authoritative, complete write of the user's local schedule data to Firestore, overwriting any stale data in the cloud with whatever is currently on screen.
 
 ---
 
 ### 1. Overview & Core Concept
 
-- **What It Does**: Enforces strict user isolation across all storage and display layers. When anyone launches the application in a private window, incognito tab, or unauthenticated session, the app presents a clean, neutral template with blank salary fields and empty history. Only upon signing into an authorized Google/Firebase account will that user's personal salary, historical adjustments, shift logs, and settings load from their private Firestore document.
-- **Target Audience / Persona**: Airline crew members and shift schedulers sharing devices, testing in incognito/private windows, or demonstrating shift tracking tools to colleagues without exposing personal wage data.
-- **Key Value**: Guarantees zero wage leakage across devices, browser tabs, or guest launches.
+- **The Problem**: When a shift is deleted from a day that has no other shifts, the key for that date (e.g. `"2026-10-01"`) is completely removed from the local JavaScript `logs` object. However, background Firestore synchronization was using `setDoc(..., { merge: true })` and REST `PATCH`. In Firestore, `merge: true` merges nested maps recursively—meaning missing map keys are treated as "unchanged" rather than "deleted". The cloud document kept the old shift, and subsequent Firestore snapshot events or cloud pulls resurrected the deleted shift back onto the calendar.
+- **The Solution**:
+  1. **Atomic Field Replacement on Shift Updates**: When auto-syncing `logs`, use Firestore's `{ mergeFields: ['logs'] }` (or direct field-level overwrite in REST) so Firestore replaces the entire `logs` dictionary rather than merging keys. This ensures any date removed locally is immediately eradicated from the cloud.
+  2. **Authoritative Overwrite on Push**: When the user clicks the "Push" button in the header, execute a true document write (`setDoc(docRef, fullData)`) that completely replaces the remote Firestore document with the local active state.
+  3. **Snapshot Guard**: Avoid overwriting recent in-memory local deletions when receiving snapshot updates if a local write is in-flight.
 
 ---
 
 ### 2. User Experience & Visual Design
 
-- **Key User Flows**:
-  1. *Unauthenticated / Private Launch*: User opens app in a private tab. Paycheck summary and salary settings show clean blank placeholders (e.g. `$0.00` / `Enter base salary` / `No history logged`). A clear prompt invites them to log in with Google to retrieve their saved profile or enter their own values.
-  2. *Sign In Flow*: Clicking "Sign In with Google" retrieves the user's private document (`users/{uid}`). All personal wages, custom rules, FMLA cases, and logs seamlessly populate with a subtle save indicator.
-  3. *Sign Out Flow*: Clicking "Sign Out" completely purges sensitive session data from memory and UI, returning the dashboard to the blank guest zero-state without reloading or leaving lingering values.
-- **Visual Identity & Clean State**:
-  - Empty wage metric displays use soft tabular styling (`$0.00`) and quiet placeholders rather than broken errors.
-  - Pay History modal displays an inviting empty state illustration/banner: *"No pay adjustments recorded yet. Add your first merit raise or promotion."*
-  - Censorship shielding toggle remains readily accessible for in-person sharing.
+- **Shift Deletion Flow**:
+  - User clicks delete (`x` / Trash) on a shift on any date.
+  - The shift immediately vanishes from the calendar cell.
+  - A green toast indicates `"Changes saved"`.
+  - Background cloud sync atomically replaces the cloud `logs` map. The deleted date key is removed in Firestore.
+- **Manual "Push" Flow**:
+  - User clicks **"Push"** in the top header.
+  - Toast displays `"Pushing local data to Cloud..."`.
+  - The complete active schedule (all logs, mid counts, FMLA cases, settings, and card preferences) is written authoritatively to Firestore, overwriting any previous cloud state.
+  - Toast confirms `"Data pushed to cloud successfully!"`.
+- **Cloud "Pull" / Reload Flow**:
+  - When the app pulls from the cloud or reloads, the deleted shift remains gone permanently.
 
 ---
 
 ### 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Elimination of Embedded Personal Seeds**
-  - *Chosen Approach*: Replace hardcoded `$89k` / `$60k` pay history arrays with an empty array `[]` and blank salary `''` in `defaultSettings`.
-  - *Why*: Hardcoded defaults in code ship to every client bundle and appear whenever storage is cold or private. Clean defaults preserve privacy by design.
-- **Decision 2: User-Scoped Local Caching (`swa_${uid}_*`)**
-  - *Chosen Approach*: When a user is signed in, local storage keys are namespaced with their UID. Unauthenticated guest actions remain in temporary session keys that do not overwrite or cross-contaminate user profiles.
-  - *Why*: Prevents browser cross-contamination if multiple users sign in from the same machine or if a guest uses the device after an employee.
-- **Decision 3: Complete Logout Memory Purge**
-  - *Chosen Approach*: The `logout` handler actively clears React state back to `defaultSettings` and wipes active user cache keys.
-  - *Why*: Prevents stale in-memory state from remaining visible after authentication terminates.
+- **Decision 1: Atomic `logs` Field Overwrite vs. Storing Tombstones**
+  - *Chosen Approach*: Atomic replacement of the `logs` map field via `{ mergeFields: ['logs'] }`.
+  - *Why*: It keeps data size minimal, leaves no tombstone clutter, and is natively supported by Firestore. When the date key is omitted, it is deleted from the cloud map.
+  - *Alternatives Considered*: Storing empty arrays (`"2026-10-01": []`). While that would also hide the shift, it clutters storage and could cause empty badges or lingering keys.
+- **Decision 2: True Authoritative Overwrite on Manual "Push"**
+  - *Chosen Approach*: On manual "Push", write the entire document without `merge: true`.
+  - *Why*: The "Push" button is explicitly an intentional user action to enforce local state onto the cloud. It guarantees that whatever the user sees is 100% identical to what is saved in Firebase.
 
 ---
 
 ### 4. Technical Architecture & Data Strategy
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       Client Browser                        │
-│                                                             │
-│   ┌──────────────────────────┐   ┌──────────────────────┐   │
-│   │  Guest / Private Launch  │   │  Authenticated User  │   │
-│   │   (No Auth Token / UID)  │   │     (Firebase UID)   │   │
-│   └─────────────┬────────────┘   └──────────┬───────────┘   │
-│                 │                           │               │
-│                 ▼                           ▼               │
-│       ┌───────────────────┐       ┌───────────────────┐     │
-│       │  defaultSettings  │       │ Scoped User Cache │     │
-│       │   (Blank Wages,   │       │  (swa_${uid}_*)   │     │
-│       │   Empty History)  │       └─────────┬─────────┘     │
-│       └───────────────────┘                 │               │
-└─────────────────────────────────────────────┼───────────────┘
-                                              │ Firestore Sync
-                                              ▼
-                             ┌─────────────────────────────────┐
-                             │       Firestore Database        │
-                             │      /users/{uid} Document      │
-                             │  - settings (salary, raises)    │
-                             │  - logs (shifts, time off)      │
-                             │  - midCounts, fmlaCases         │
-                             └─────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│                   Calendar UI                          │
+│   (User deletes OT / DT shift on 2026-10-01)          │
+└──────────────────────────┬─────────────────────────────┘
+                           │ 1. delete newLogs[ds]
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│              useScheduleData.updateLogs                │
+│   - Update React state & localStorage                  │
+│   - Trigger syncToFirebase({ logs: processedLogs })    │
+└──────────────────────────┬─────────────────────────────┘
+                           │ 2. Atomic field replacement
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│              useFirebaseSync.syncToFirebase            │
+│   - SDK: setDoc(docRef, data, { mergeFields })         │
+│   - REST: updateMask.fieldPaths=logs                   │
+│   - Completely replaces remote 'logs' map in Firestore │
+└──────────────────────────┬─────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│           Firestore Cloud Storage                      │
+│   - '2026-10-01' key is removed                        │
+│   - Snapshot event emits clean logs                    │
+│   - Shift NEVER reappears                              │
+└────────────────────────────────────────────────────────┘
 ```
 
-- **State Reset Logic (`useScheduleData.ts`)**:
-  - Set `salary: ''` and `payHistory: []` in `defaultSettings`.
-  - When `user` transitions to `null` (logout), trigger `resetToDefaults()`.
-  - When `user` transitions from `null` to `User` (login), load user-namespaced storage or fetch Firestore document `users/${user.uid}`.
-- **Security Invariants**:
-  - `firestore.rules` already enforces `request.auth.uid == userId` for `/users/{userId}`.
-  - No client payload from an unauthenticated user can overwrite an existing user's cloud document.
+- **File Modifications Required**:
+  - `src/hooks/useFirebaseSync.ts`:
+    - Update `syncToFirebase`: Accept an optional `fieldList` or `isAuthoritative` flag. When updating partial data like `{ logs }`, specify `mergeFields: Object.keys(sanitizedData)`. When `isAuthoritative: true` (used by Push), execute `setDoc(docRef, sanitizedData)` without merge.
+    - Update `directRestSync`: Include `updateMask.fieldPaths` in query parameters when syncing specific fields so the REST API also performs an exact field replacement.
+  - `src/hooks/useScheduleData.ts`:
+    - Pass `isAuthoritative: true` from `forceSyncToCloud` so the "Push" button completely overwrites the cloud document.
+    - Ensure `handleDocSnapshot` respects in-flight local modifications.

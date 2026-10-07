@@ -108,6 +108,7 @@ export const useScheduleData = () => {
 
   const [showSavedIndicator, setShowSavedIndicator] = useState(false);
   const savedTimeoutRef = useRef<any>(null);
+  const isLocalMutationRef = useRef<number>(0);
 
   const triggerSavedIndicator = useCallback(() => {
     setShowSavedIndicator(true);
@@ -252,12 +253,22 @@ export const useScheduleData = () => {
     let unsubscribe: (() => void) | null = null;
 
     const handleDocSnapshot = (docSnap: any) => {
+      // Ignore local pending writes to avoid stale or race-condition overwrites
+      if (docSnap.metadata?.hasPendingWrites) {
+        return;
+      }
+
+      // If a local mutation occurred within the last 1500ms, ignore incoming snapshot to let local state settle
+      if (Date.now() - isLocalMutationRef.current < 1500) {
+        return;
+      }
+
       if (docSnap.exists()) {
         const data = docSnap.data();
 
-        if (data.logs) {
-          setLogs(data.logs);
-          saveToStorage('logs', data.logs);
+        if (data.logs !== undefined) {
+          setLogs(data.logs || {});
+          saveToStorage('logs', data.logs || {});
         }
 
         if (data.midCounts) {
@@ -342,6 +353,7 @@ export const useScheduleData = () => {
   }, [isLocked]);
 
   const updateLogs = useCallback((newLogs: LogsState) => {
+    isLocalMutationRef.current = Date.now();
     const processedLogs = autoAssignWorkedHolidays(newLogs);
     setLogsHistory(hist => {
       const newHist = [...hist, logs];
@@ -543,15 +555,18 @@ export const useScheduleData = () => {
 
   const forceSyncToCloud = useCallback(async () => {
     if (!user) return false;
+    isLocalMutationRef.current = Date.now();
     try {
-      const success = await syncToFirebase({
+      const fullData = {
         logs,
         midCounts,
         fmlaCases,
         cardPrefs,
         settings,
         lockedMonths
-      });
+      };
+      // Authoritative overwrite: passes isAuthoritative=true to replace the entire remote document
+      const success = await syncToFirebase(fullData, true);
       if (success) {
         triggerSavedIndicator();
         return true;
