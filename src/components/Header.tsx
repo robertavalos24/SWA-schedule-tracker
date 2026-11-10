@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Share2, LogIn, LogOut, Database, Download, Upload, Cloud } from 'lucide-react';
-import { ThemeType } from '../types';
+import { Share2, LogIn, LogOut, Database, Download, Upload, Cloud, AlertTriangle, RefreshCw } from 'lucide-react';
+import { ThemeType, CloudSyncState } from '../types';
 import { User } from 'firebase/auth';
 import { useModalStore } from '../store/useModalStore';
 import { PWAInstallPrompt } from './PWAInstallPrompt';
@@ -12,6 +12,8 @@ interface HeaderProps {
   openGuide: () => void;
   isLocked: boolean;
   user?: User | null;
+  cloudSyncState?: CloudSyncState;
+  cloudSyncError?: string | null;
   login: () => void;
   logout: () => void;
   backupToSheets: () => void;
@@ -29,7 +31,21 @@ const themeIcons: Record<ThemeType, string> = {
 
 const themes: ThemeType[] = ['light', 'dark', 'ocean', 'sunset', 'forest'];
 
-export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings, openGuide, isLocked, user, login, logout, backupToSheets, forceSyncToCloud, pullFromCloud }) => {
+export const Header: React.FC<HeaderProps> = ({
+  theme,
+  toggleTheme,
+  openSettings,
+  openGuide,
+  isLocked,
+  user,
+  cloudSyncState = 'idle',
+  cloudSyncError = null,
+  login,
+  logout,
+  backupToSheets,
+  forceSyncToCloud,
+  pullFromCloud
+}) => {
   const { openModal } = useModalStore();
   const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -105,18 +121,38 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
           {/* Cloud Sync Auth Button */}
           {user ? (
             <div className="flex items-center gap-1 sm:gap-1.5 bg-white/10 p-1 rounded-xl border border-white/15">
-              <button 
-                className="bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 rounded-lg px-2 sm:px-2.5 py-1 text-[11px] font-bold hover:bg-emerald-500/30 transition-all flex items-center gap-1.5 cursor-pointer"
-                onClick={() => openModal('cloudStatus')}
-                title={`Signed in as ${user.email}. Click for Cloud & Firebase Diagnostics.`}
-              >
-                {user.photoURL ? (
-                  <img src={user.photoURL} alt="Profile" className="w-3.5 h-3.5 rounded-full" />
-                ) : (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                )}
-                <span className="hidden md:inline">Cloud Active</span>
-              </button>
+              {cloudSyncState === 'error' || cloudSyncError ? (
+                <button
+                  className="bg-rose-500/25 text-rose-200 border border-rose-400/50 rounded-lg px-2 sm:px-2.5 py-1 text-[11px] font-bold hover:bg-rose-500/35 transition-all flex items-center gap-1.5 cursor-pointer"
+                  onClick={() => openModal('cloudStatus')}
+                  title={`Sync Failed: ${cloudSyncError || 'Unable to sync with Firestore'}. Click for details.`}
+                >
+                  <AlertTriangle size={13} className="text-rose-300 shrink-0" />
+                  <span>Sync Failed</span>
+                </button>
+              ) : cloudSyncState === 'syncing' ? (
+                <button
+                  className="bg-sky-500/20 text-sky-100 border border-sky-400/30 rounded-lg px-2 sm:px-2.5 py-1 text-[11px] font-bold hover:bg-sky-500/30 transition-all flex items-center gap-1.5 cursor-pointer"
+                  onClick={() => openModal('cloudStatus')}
+                  title={`Syncing schedule for ${user.email}...`}
+                >
+                  <RefreshCw size={12} className="text-sky-300 animate-spin shrink-0" />
+                  <span className="hidden md:inline">Syncing...</span>
+                </button>
+              ) : (
+                <button 
+                  className="bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 rounded-lg px-2 sm:px-2.5 py-1 text-[11px] font-bold hover:bg-emerald-500/30 transition-all flex items-center gap-1.5 cursor-pointer"
+                  onClick={() => openModal('cloudStatus')}
+                  title={`Signed in as ${user.email}. Click for Cloud & Firebase Diagnostics.`}
+                >
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="Profile" className="w-3.5 h-3.5 rounded-full" />
+                  ) : (
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  )}
+                  <span className="hidden md:inline">Cloud Active</span>
+                </button>
+              )}
 
               <button 
                 className="bg-[var(--swa-orange)] hover:brightness-110 text-white rounded-lg px-2 py-1 text-[10px] sm:text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-sm active:scale-95"
@@ -238,6 +274,23 @@ export const Header: React.FC<HeaderProps> = ({ theme, toggleTheme, openSettings
           </button>
         </div>
       </div>
+
+      {user && (cloudSyncState === 'error' || cloudSyncError) && (
+        <div className="bg-rose-950/90 border-t border-rose-500/40 px-3 sm:px-6 py-1.5 text-rose-100 text-[11px] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle size={14} className="text-rose-400 shrink-0" />
+            <span className="font-semibold truncate">
+              Cloud Sync Error: {cloudSyncError || 'Failed to sync changes to Firestore.'}
+            </span>
+          </div>
+          <button
+            onClick={forceSyncToCloud}
+            className="px-2.5 py-0.5 rounded bg-rose-500 hover:bg-rose-400 text-white font-bold text-[10px] shrink-0 cursor-pointer transition-colors"
+          >
+            Retry Push
+          </button>
+        </div>
+      )}
     </header>
   );
 };

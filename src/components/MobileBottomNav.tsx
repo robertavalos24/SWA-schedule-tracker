@@ -6,7 +6,7 @@ import {
   ChevronRight, Smartphone, RefreshCw
 } from 'lucide-react';
 import { PWAInstallPrompt } from './PWAInstallPrompt';
-import { ThemeType } from '../types';
+import { ThemeType, CloudSyncState } from '../types';
 import { formatPto } from '../utils/calculations';
 
 interface MobileBottomNavProps {
@@ -20,6 +20,8 @@ interface MobileBottomNavProps {
   theme: ThemeType;
   toggleTheme: (theme?: ThemeType) => void;
   user: any;
+  cloudSyncState?: CloudSyncState;
+  cloudSyncError?: string | null;
   login: () => void;
   logout: () => void;
   forceSyncToCloud: () => void;
@@ -38,6 +40,8 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   theme,
   toggleTheme,
   user,
+  cloudSyncState = 'idle',
+  cloudSyncError = null,
   login,
   logout,
   forceSyncToCloud,
@@ -261,9 +265,22 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
             <div className="p-3 rounded-2xl bg-[var(--sub-bg)] border border-[var(--border-color)] space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Cloud size={16} className={user ? "text-[var(--pay-green)]" : "text-[var(--text-muted)]"} />
+                  <Cloud
+                    size={16}
+                    className={
+                      !user
+                        ? "text-[var(--text-muted)]"
+                        : cloudSyncState === 'error' || cloudSyncError
+                        ? "text-[var(--swa-red)]"
+                        : "text-[var(--pay-green)]"
+                    }
+                  />
                   <span className="text-xs font-bold text-[var(--text-main)]">
-                    {user ? `Signed in as ${user.email?.split('@')[0]}` : 'Cloud Sync (Offline)'}
+                    {!user
+                      ? 'Cloud Sync (Offline)'
+                      : cloudSyncState === 'error' || cloudSyncError
+                      ? `Sync Failed (${user.email?.split('@')[0]})`
+                      : `Signed in as ${user.email?.split('@')[0]}`}
                   </span>
                 </div>
                 {user ? (
@@ -282,6 +299,11 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
                   </button>
                 )}
               </div>
+              {user && (cloudSyncState === 'error' || cloudSyncError) && (
+                <div className="text-[11px] font-semibold text-rose-500 bg-rose-500/10 border border-rose-500/30 rounded-lg px-2.5 py-1.5 break-words">
+                  {cloudSyncError || 'Cloud sync failed. Check network or retry Push.'}
+                </div>
+              )}
 
               {user && (
                 <div className="flex gap-2 pt-1">

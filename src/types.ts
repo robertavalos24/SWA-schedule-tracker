@@ -1,6 +1,19 @@
 export type ThemeType = 'light' | 'dark' | 'ocean' | 'sunset' | 'forest';
 
+export type CloudSyncState = 'idle' | 'syncing' | 'synced' | 'error';
+
+export interface ShiftTombstone {
+  id: string;
+  date: string;
+  deletedAt: number;
+  cloudConfirmed: boolean;
+  confirmedAt?: number;
+}
+
+export type TombstoneMap = Record<string, ShiftTombstone>;
+
 export interface LogEntry {
+  id?: string;
   type: string;
   hrs: number;
   prem?: boolean;

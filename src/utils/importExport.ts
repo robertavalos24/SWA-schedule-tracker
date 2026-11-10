@@ -50,31 +50,20 @@ export const exportCSV = async (logs: LogsState) => {
 
   const fileName = 'SWA_Schedule_Export.csv';
 
-  // Try File System Access API first
-  const isIframe = window.self !== window.top;
-  if ('showSaveFilePicker' in window && !isIframe) {
-    try {
-      const handle = await (window as any).showSaveFilePicker({
-        suggestedName: fileName,
-        types: [{
-          description: 'CSV File',
-          accept: { 'text/csv': ['.csv'] },
-        }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(csv);
-      await writable.close();
-      return;
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return;
-      console.error('File System Access API error:', err);
-    }
-  }
-
-  const a = document.createElement('a'); 
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); 
-  a.download = fileName; 
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
   a.click();
+  setTimeout(() => {
+    try {
+      if (a.parentNode) a.parentNode.removeChild(a);
+    } catch {}
+    URL.revokeObjectURL(url);
+  }, 1500);
 };
 
 export const exportICS = (logs: LogsState) => {
@@ -173,12 +162,19 @@ export const exportICS = (logs: LogsState) => {
   const blob = new Blob([icsLines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
   const fileName = 'SWA_Schedule.ics';
   
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
+  a.href = url;
   a.download = fileName;
+  a.rel = 'noopener';
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
+  setTimeout(() => {
+    try {
+      if (a.parentNode) a.parentNode.removeChild(a);
+    } catch {}
+    URL.revokeObjectURL(url);
+  }, 1500);
 };
 
 export const exportBackup = async (logs: LogsState, midCounts: MidCountsState, settings: Settings, cardPrefs: CardPrefs, fmlaCases: FmlaCase[], stats?: any, attHistory?: any[], viewState?: { year: number, month: number }, theme?: string, isLocked?: boolean, lockedMonths?: string[]) => {
@@ -198,35 +194,22 @@ export const exportBackup = async (logs: LogsState, midCounts: MidCountsState, s
   
   const jsonStr = JSON.stringify(b, null, 2);
   const dateStr = new Date().toISOString().split('T')[0];
-  const fileName = `v2.0 SCHED CAL ${dateStr}.json`;
+  const fileName = `LUV_Tracker_Backup_${dateStr}.json`;
 
-  // Try File System Access API first (supported in Chrome, Edge, etc.)
-  const isIframe = window.self !== window.top;
-  if ('showSaveFilePicker' in window && !isIframe) {
-    try {
-      const handle = await (window as any).showSaveFilePicker({
-        suggestedName: fileName,
-        types: [{
-          description: 'JSON Backup File',
-          accept: { 'application/json': ['.json'] },
-        }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(jsonStr);
-      await writable.close();
-      return handle; // Return the handle so it can be reused
-    } catch (err) {
-      // If user cancels, just return
-      if ((err as Error).name === 'AbortError') return null;
-      console.error('File System Access API error:', err);
-      // Fallback to standard download if API fails for other reasons
-    }
-  }
-
-  const a = document.createElement('a'); 
-  a.href = URL.createObjectURL(new Blob([jsonStr], { type: 'application/json' })); 
-  a.download = fileName; 
+  const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
   a.click();
+  setTimeout(() => {
+    try {
+      if (a.parentNode) a.parentNode.removeChild(a);
+    } catch {}
+    URL.revokeObjectURL(url);
+  }, 1500);
   return null;
 };
 

@@ -1,11 +1,11 @@
 import { initializeApp } from 'firebase/app';
 import {
   initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
   memoryLocalCache,
   getFirestore,
   Firestore,
+  doc,
+  getDocFromServer,
 } from 'firebase/firestore';
 import {
   initializeAuth,
@@ -43,25 +43,47 @@ try {
   auth = getAuth(app);
 }
 
-// Initialize Cloud Firestore with resilient multi-tab persistent cache and graceful fallbacks
+// Purge any legacy Firestore IndexedDB caches that could hold stuck mutations or stale shifts
+if (typeof window !== 'undefined' && window.indexedDB) {
+  try {
+    if (typeof window.indexedDB.databases === 'function') {
+      window.indexedDB.databases().then((dbs) => {
+        dbs.forEach((dbInfo) => {
+          if (dbInfo.name && dbInfo.name.includes('firestore')) {
+            try {
+              window.indexedDB.deleteDatabase(dbInfo.name);
+            } catch {}
+          }
+        });
+      }).catch(() => {});
+    }
+  } catch {}
+}
+
+// Initialize Cloud Firestore with memoryLocalCache and auto-detected long polling
+// so the SDK never replays stale IndexedDB mutations or triggers WebChannel 400 errors in iframes
 const dbId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
 let db: Firestore;
 try {
   db = initializeFirestore(app, {
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager(),
-    }),
+    localCache: memoryLocalCache(),
+    experimentalAutoDetectLongPolling: true,
   }, dbId);
 } catch (err1) {
-  console.warn('Firestore persistent cache init warning, falling back to memoryLocalCache:', err1);
-  try {
-    db = initializeFirestore(app, {
-      localCache: memoryLocalCache(),
-    }, dbId);
-  } catch (err2) {
-    console.warn('Firestore memoryLocalCache warning, falling back to getFirestore:', err2);
-    db = getFirestore(app, dbId);
-  }
+  console.warn('Firestore memoryLocalCache init warning, falling back to getFirestore:', err1);
+  db = getFirestore(app, dbId);
+}
+
+if (typeof window !== 'undefined') {
+  (async function testConnection() {
+    try {
+      await getDocFromServer(doc(db, 'test', 'connection'));
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('the client is offline')) {
+        console.error('Please check your Firebase configuration.');
+      }
+    }
+  })();
 }
 
 // Clean Google provider for Firebase Auth and Firestore Cloud Sync

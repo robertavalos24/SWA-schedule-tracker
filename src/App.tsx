@@ -32,6 +32,7 @@ import { BidLineImportModal } from './components/BidLineImportModal';
 export default function App() {
   const {
     user, login, logout, isInitializingAuth,
+    cloudSyncState, cloudSyncError,
     logs, updateLogs, undoLogs, logsHistory, midCounts, updateMidCounts, fmlaCases, updateFmlaCases,
     settings, updateSettings, overwriteSettings, cardPrefs, updateCardPrefs, theme, toggleTheme, setTheme,
     viewMonth, setViewMonth, viewYear, setViewYear, isYearView, setIsYearView, clearLogs,
@@ -109,12 +110,28 @@ export default function App() {
   const isDevHost = typeof window !== 'undefined' && window.location.hostname.includes('ais-dev-');
   const sharedHostUrl = typeof window !== 'undefined' ? window.location.href.replace('ais-dev-', 'ais-pre-') : '';
 
+  const lastSyncErrorToastRef = useRef<{ msg: string; ts: number }>({ msg: '', ts: 0 });
+
   useEffect(() => {
     const handleOffline = () => {
       showToast('Firebase is offline. Working in offline local mode.', 'warning');
     };
+    const handleCloudSyncError = (ev: Event) => {
+      const customEv = ev as CustomEvent<{ message?: string }>;
+      const msg = customEv.detail?.message || 'Unable to sync changes with Firestore.';
+      const now = Date.now();
+      if (lastSyncErrorToastRef.current.msg === msg && now - lastSyncErrorToastRef.current.ts < 2500) {
+        return;
+      }
+      lastSyncErrorToastRef.current = { msg, ts: now };
+      showToast(`Cloud sync failed: ${msg}`, 'error');
+    };
     window.addEventListener('firestore-offline', handleOffline);
-    return () => window.removeEventListener('firestore-offline', handleOffline);
+    window.addEventListener('cloud-sync-error', handleCloudSyncError);
+    return () => {
+      window.removeEventListener('firestore-offline', handleOffline);
+      window.removeEventListener('cloud-sync-error', handleCloudSyncError);
+    };
   }, [showToast]);
 
   useEffect(() => {
@@ -158,7 +175,7 @@ export default function App() {
       }
 
       if (changed) {
-        updateSettings(newSettings);
+        updateSettings(newSettings, true);
       }
       lastViewedYearRef.current = newYear;
     }
@@ -180,50 +197,26 @@ export default function App() {
   }, []);
 
   const handleBackup = React.useCallback(async () => {
-    const isIframe = window.self !== window.top;
-    
-    if (isIframe && 'showSaveFilePicker' in window) {
-      showToast('To use "Save As" and "Overwrite", open the app in a new tab.', 'info');
-      // Still allow the fallback download
+    try {
+      await exportBackup(
+        logs,
+        midCounts,
+        settings,
+        cardPrefs,
+        fmlaCases,
+        stats,
+        currentAttHistory,
+        { year: viewYear, month: viewMonth },
+        theme,
+        isLocked,
+        lockedMonths
+      );
+      showToast('Backup JSON downloaded!', 'success');
+    } catch (err) {
+      console.error('Failed to export JSON backup:', err);
+      showToast('Failed to download JSON backup.', 'error');
     }
-
-    if (backupHandle) {
-      // Try to overwrite
-      try {
-        const options = { mode: 'readwrite' };
-        if (await backupHandle.queryPermission(options) === 'granted') {
-          const success = await saveToHandle(backupHandle, logs, midCounts, settings, cardPrefs, fmlaCases, stats, currentAttHistory, { year: viewYear, month: viewMonth }, theme, isLocked, lockedMonths);
-          if (success) {
-            showToast('Backup successfully updated!', 'success');
-            return;
-          }
-        } else {
-          // Request permission
-          if (await backupHandle.requestPermission(options) === 'granted') {
-            const success = await saveToHandle(backupHandle, logs, midCounts, settings, cardPrefs, fmlaCases, stats, currentAttHistory, { year: viewYear, month: viewMonth }, theme, isLocked, lockedMonths);
-            if (success) {
-              showToast('Backup successfully updated!', 'success');
-              return;
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Overwrite failed, falling back to picker:', err);
-      }
-    }
-
-    // If no handle or overwrite failed, use picker
-    const newHandle = await exportBackup(logs, midCounts, settings, cardPrefs, fmlaCases, stats, currentAttHistory, { year: viewYear, month: viewMonth }, theme, isLocked, lockedMonths);
-    if (newHandle) {
-      setBackupHandle(newHandle);
-      try {
-        await saveHandleToIndexedDB(newHandle);
-        showToast('Backup successfully saved!', 'success');
-      } catch (err) {
-        console.error('Failed to save handle to IndexedDB:', err);
-      }
-    }
-  }, [backupHandle, logs, midCounts, settings, cardPrefs, fmlaCases, stats, currentAttHistory, viewYear, viewMonth, theme, isLocked, lockedMonths, showToast]);
+  }, [logs, midCounts, settings, cardPrefs, fmlaCases, stats, currentAttHistory, viewYear, viewMonth, theme, isLocked, lockedMonths, showToast]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -593,9 +586,9 @@ export default function App() {
         }
       }
 
-      if (entry.type === 'PTO' || entry.type === 'FMLA-P' || entry.type === 'UNPTO' || entry.type === 'FML-UNP' || entry.type === 'MED-P' || entry.type === 'MED-UNP') {
+      if (entry.type === 'PTO' || entry.type === 'FMLA-P' || entry.type === 'UNPTO' || entry.type === 'FML-UNP' || entry.type === 'MED-P' || entry.type === 'MED-P-PTO' || entry.type === 'MED-UNP') {
         const { entries, warning } = processEntryWithBalances(
-          { ...dayEntries[editIndex], ...entry },
+          { ...entry },
           editDate,
           newLogs,
           dayEntries,
@@ -642,9 +635,9 @@ export default function App() {
             openModal('ptoWarning');
           }
         }
-        dayEntries[editIndex] = { ...dayEntries[editIndex], ...entry, unpaidHrs };
+        dayEntries[editIndex] = { ...entry, unpaidHrs };
       } else {
-        dayEntries[editIndex] = { ...dayEntries[editIndex], ...entry };
+        dayEntries[editIndex] = { ...entry };
       }
       
       newLogs[editDate] = dayEntries;
@@ -835,7 +828,7 @@ export default function App() {
         if (entriesToCopy.length > 0) {
           // Only if empty to be safe
           if (!newLogs[currentDs] || newLogs[currentDs].length === 0) {
-            newLogs[currentDs] = entriesToCopy.map(e => ({ ...e }));
+            newLogs[currentDs] = entriesToCopy.map(({ id: _copiedId, ...rest }) => ({ ...rest }));
             copiesCount++;
           }
         }
@@ -864,7 +857,7 @@ export default function App() {
       return;
     }
 
-    const newEntry = { ...entry };
+    const { id: _origShiftId, ...newEntry } = entry;
     const newLogs = { ...logs };
     const dayEntries = newLogs[nextDateStr] ? [...newLogs[nextDateStr]] : [];
 
@@ -1444,7 +1437,7 @@ export default function App() {
     const data = pendingRestoreData;
     try {
       if (data.logs && typeof data.logs === 'object' && !Array.isArray(data.logs)) {
-        updateLogs(data.logs);
+        updateLogs(data.logs, { isRestore: true });
       }
       if (data.midCounts && typeof data.midCounts === 'object' && !Array.isArray(data.midCounts)) {
         updateMidCounts(data.midCounts);
@@ -1568,6 +1561,8 @@ export default function App() {
         openGuide={() => openModal('userGuide')}
         isLocked={isLocked}
         user={user}
+        cloudSyncState={cloudSyncState}
+        cloudSyncError={cloudSyncError}
         login={login}
         logout={logout}
         backupToSheets={() => {
@@ -1603,7 +1598,9 @@ export default function App() {
             }
           } catch (e: any) {
             console.warn('Push to cloud failed:', e);
-            showToast('Cloud push error: ' + (e?.message || 'Unknown error'), 'error');
+            const msg = e?.message || 'Unknown error';
+            lastSyncErrorToastRef.current = { msg, ts: Date.now() };
+            showToast('Cloud push error: ' + msg, 'error');
           }
         }}
         pullFromCloud={async () => {
@@ -1633,7 +1630,9 @@ export default function App() {
             }
           } catch (e: any) {
             console.warn('Pull from cloud failed:', e);
-            showToast('Unable to pull cloud data: ' + (e?.message || 'Check network / permissions'), 'error');
+            const msg = e?.message || 'Check network / permissions';
+            lastSyncErrorToastRef.current = { msg, ts: Date.now() };
+            showToast('Unable to pull cloud data: ' + msg, 'error');
           }
         }}
       />
@@ -1815,7 +1814,7 @@ export default function App() {
 
       {/* Auto-saved Persisted Indicator */}
       <AnimatePresence>
-        {showSavedIndicator && (
+        {showSavedIndicator && cloudSyncState !== 'error' && !cloudSyncError && (
           <motion.div
             initial={{ opacity: 0, y: 15, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1855,10 +1854,35 @@ export default function App() {
         theme={theme}
         toggleTheme={toggleTheme}
         user={user}
+        cloudSyncState={cloudSyncState}
+        cloudSyncError={cloudSyncError}
         login={login}
         logout={logout}
-        forceSyncToCloud={forceSyncToCloud}
-        pullFromCloud={pullFromCloud}
+        forceSyncToCloud={() => {
+          showToast('Pushing local data to Cloud...', 'info');
+          forceSyncToCloud()
+            .then(ok => {
+              if (ok) showToast('Data pushed to cloud successfully!', 'success');
+            })
+            .catch((e: any) => {
+              const msg = e?.message || 'Unknown error';
+              lastSyncErrorToastRef.current = { msg, ts: Date.now() };
+              showToast('Cloud push error: ' + msg, 'error');
+            });
+        }}
+        pullFromCloud={() => {
+          showToast('Pulling data from cloud...', 'info');
+          pullFromCloud()
+            .then(ok => {
+              if (ok) showToast('Schedule data successfully pulled from cloud!', 'success');
+              else showToast('No cloud data found yet. Click "Push to Cloud" first.', 'info');
+            })
+            .catch((e: any) => {
+              const msg = e?.message || 'Check network / permissions';
+              lastSyncErrorToastRef.current = { msg, ts: Date.now() };
+              showToast('Unable to pull cloud data: ' + msg, 'error');
+            });
+        }}
         onOpenModal={openModal}
       />
 
@@ -1889,10 +1913,9 @@ export default function App() {
             <div className="flex flex-col gap-2 mt-4">
               <button 
                 className="w-full py-3 bg-[var(--swa-red)]/10 text-[var(--swa-red)] font-black rounded-xl text-xs uppercase tracking-widest transition-all hover:bg-[var(--swa-red)]/20 active:scale-[0.98]"
-                onClick={() => {
-                  updateLogs({});
-                  updateMidCounts({});
+                onClick={async () => {
                   closeModal('confirmReset');
+                  await clearLogs();
                   showToast("Calendar schedule entries cleared successfully.", 'warning');
                 }}
               >
@@ -1900,7 +1923,12 @@ export default function App() {
               </button>
               <button 
                 className="w-full py-3 bg-[var(--swa-red)] text-white font-black rounded-xl text-xs uppercase tracking-widest transition-all hover:brightness-110 shadow-md active:scale-[0.98]"
-                onClick={() => {
+                onClick={async () => {
+                  try {
+                    await clearLogs();
+                  } catch (e) {
+                    console.error('Error clearing cloud data during factory reset:', e);
+                  }
                   localStorage.clear();
                   window.location.reload();
                 }}
@@ -1979,6 +2007,8 @@ export default function App() {
 
       <Modals 
         user={user}
+        cloudSyncState={cloudSyncState}
+        cloudSyncError={cloudSyncError}
         login={login}
         logout={logout}
         forceSyncToCloud={forceSyncToCloud}

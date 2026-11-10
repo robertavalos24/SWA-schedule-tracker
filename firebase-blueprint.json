@@ -28,6 +28,10 @@
         "lockedMonths": {
           "type": "array",
           "description": "List of locked month strings."
+        },
+        "deletedShiftIds": {
+          "type": "object",
+          "description": "Tombstone map of deleted shift IDs to deletion timestamps."
         }
       }
     }

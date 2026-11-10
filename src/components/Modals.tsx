@@ -7,7 +7,7 @@ import {
   Percent, User, ExternalLink, Cloud, Activity, RefreshCw, Database, Check, Server, Wifi, WifiOff
 } from 'lucide-react';
 import { useToast } from '../contexts/ToastContext';
-import { LogEntry, FmlaCase, Settings } from '../types';
+import { LogEntry, FmlaCase, Settings, CloudSyncState } from '../types';
 import { getBlockLabel, getBlockTooltip, getBlockClass, getBlockStartHour, calculatePay, getMidRate, getPtoBalanceOnDate, processEntryWithBalances, getFmlaMonthStats, getEffectiveSalaryAndLevel, formatPto, getAutoStiStats } from '../utils/calculations';
 import { swaHolidays } from '../utils/constants';
 import { useModalStore } from '../store/useModalStore';
@@ -17,6 +17,8 @@ import { db, auth } from '../firebase';
 
 interface ModalsProps {
   user?: FirebaseUser | null;
+  cloudSyncState?: CloudSyncState;
+  cloudSyncError?: string | null;
   login?: () => void;
   logout?: () => void;
   forceSyncToCloud?: () => Promise<boolean> | void;
@@ -60,7 +62,7 @@ interface ModalsProps {
 
 export const Modals: React.FC<ModalsProps> = (props) => {
   const {
-    user, login, logout, forceSyncToCloud, pullFromCloud, handleBackup,
+    user, cloudSyncState, cloudSyncError, login, logout, forceSyncToCloud, pullFromCloud, handleBackup,
     activeDate, editDate, editIndex, logs, fmlaCases, settings, cardPrefs, viewYear, viewMonth, midCounts, currentAttHistory, stats,
     executeSave, removeEntry, saveEditBlock, addFmlaCase, updateFmlaCase, removeFmlaCase, setOverride, updateToggles, saveBulkMid, addManualInfraction, updateLogs,
     logHrs, setLogHrs, updateSettings, selectedPaycheck, clearMonthData, duplicateEntryToNextDay, ptoWarningMessage,
@@ -568,11 +570,24 @@ export const Modals: React.FC<ModalsProps> = (props) => {
   };
 
   const handleSaveEditBlock = () => {
+    const defaultTimes: Record<string, string> = {
+      'WORK-AM': '0600-1400',
+      'WORK-PM': '1400-2200',
+      'WORK-MID': '2200-0600',
+      'WORK-SW1': '1000-1800',
+      'WORK-SW2': '1800-0200',
+      'WORK-SW3': '0200-1000',
+      'WORK-PROJ': '0800-0400',
+    };
+
     let label = "";
     if (ebStart && ebEnd) {
       const sLabel = ebStart.replace(':', '');
       const eLabel = ebEnd.replace(':', '');
-      label = `${sLabel}-${eLabel}`;
+      const candidate = `${sLabel}-${eLabel}`;
+      if (defaultTimes[ebType] !== candidate) {
+        label = candidate;
+      }
     }
     
     const entry: LogEntry = {
@@ -585,7 +600,7 @@ export const Modals: React.FC<ModalsProps> = (props) => {
     if (ebType === 'FMLA-P' || ebType === 'FML-UNP') {
       entry.fmlaCase = ebFmlaCase;
     }
-    if (label !== "") {
+    if (label !== "" && (ebType.startsWith('WORK') || ebType === 'OT' || ebType === 'DT' || ebType === 'WOP')) {
       entry.label = label;
     }
     if (['TARDY', 'NO-SHOW'].includes(ebType)) {
@@ -1285,7 +1300,30 @@ export const Modals: React.FC<ModalsProps> = (props) => {
             
             <div className="mb-2.5">
               <label className="text-[9px] font-extrabold text-[var(--swa-blue)] uppercase mb-0.5 block text-center">Shift Type</label>
-              <select value={ebType} onChange={(e) => setEbType(e.target.value)} className="w-full p-2 border border-[var(--border-color)] rounded bg-[var(--card-bg)] text-[var(--text-main)] box-border">
+              <select
+                value={ebType}
+                onChange={(e) => {
+                  const nextType = e.target.value;
+                  setEbType(nextType);
+                  const times: Record<string, string[]> = {
+                    'WORK-AM': ['06:00', '14:00'],
+                    'WORK-PM': ['14:00', '22:00'],
+                    'WORK-MID': ['22:00', '06:00'],
+                    'WORK-SW1': ['10:00', '18:00'],
+                    'WORK-SW2': ['18:00', '02:00'],
+                    'WORK-SW3': ['02:00', '10:00'],
+                    'WORK-PROJ': ['08:00', '04:00'],
+                  };
+                  if (times[nextType]) {
+                    setEbStart(times[nextType][0]);
+                    setEbEnd(times[nextType][1]);
+                  } else if (!nextType.startsWith('WORK') && nextType !== 'OT' && nextType !== 'DT') {
+                    setEbStart('');
+                    setEbEnd('');
+                  }
+                }}
+                className="w-full p-2 border border-[var(--border-color)] rounded bg-[var(--card-bg)] text-[var(--text-main)] box-border"
+              >
                 <optgroup label="Work Shifts">
                   <option value="WORK-AM">AM</option>
                   <option value="WORK-PM">PM</option>
@@ -4279,6 +4317,19 @@ export const Modals: React.FC<ModalsProps> = (props) => {
                 <X size={18} />
               </button>
             </div>
+
+            {/* Sync Error Banner */}
+            {(cloudSyncState === 'error' || cloudSyncError) && (
+              <div className="p-3.5 mb-4 bg-rose-500/15 border border-rose-500/40 rounded-2xl text-xs flex items-start gap-2.5 text-rose-700 dark:text-rose-300">
+                <AlertTriangle size={16} className="text-rose-500 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <span className="font-black uppercase tracking-wider text-[10px] block mb-0.5">Last Cloud Sync Failed</span>
+                  <span className="text-[11px] font-semibold break-words block">
+                    {cloudSyncError || 'Could not sync changes with Firestore. Your changes are still safely saved locally.'}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Account Status Card */}
             <div className="bg-[var(--hover-bg)] p-3.5 rounded-2xl border border-[var(--border-color)] mb-4 flex items-center justify-between">

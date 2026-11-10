@@ -1,8 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Settings, CardPrefs, FmlaCase, LogsState, MidCountsState, ThemeType } from '../types';
+import { Settings, CardPrefs, FmlaCase, LogsState, MidCountsState, ThemeType, TombstoneMap } from '../types';
 import { autoAssignWorkedHolidays } from '../utils/calculations';
-import { useFirebaseSync, directRestPull } from './useFirebaseSync';
-import { doc, onSnapshot, getDoc, getDocFromCache } from 'firebase/firestore';
+import { useFirebaseSync, directRestPull, cleanLogsObject } from './useFirebaseSync';
+import {
+  normalizeLogs,
+  filterLogsWithTombstones,
+  recordDeletedShifts,
+  removeRestoredIdsFromTombstones,
+  mergeCloudTombstones,
+  confirmAndPruneTombstones,
+  buildCloudDeletedIdsMap,
+} from '../utils/shiftSync';
+import { doc, onSnapshot, getDocFromServer } from 'firebase/firestore';
+import { auth } from '../firebase';
 
 const themes: ThemeType[] = ['light', 'dark', 'ocean', 'sunset', 'forest'];
 
@@ -78,17 +88,22 @@ if (typeof window !== 'undefined') {
 }
 
 export const useScheduleData = () => {
-  const { 
-    user, 
-    googleAccessToken, 
-    isInitializingAuth, 
-    login, 
-    logout: firebaseLogout, 
-    syncToFirebase, 
-    syncToGoogleSheets, 
-    db, 
-    handleFirestoreError, 
-    OperationType 
+  const {
+    user,
+    googleAccessToken,
+    isInitializingAuth,
+    cloudSyncState,
+    cloudSyncError,
+    setCloudSyncState,
+    reportSyncSuccess,
+    reportSyncError,
+    login,
+    logout: firebaseLogout,
+    syncToFirebase,
+    syncToGoogleSheets,
+    db,
+    handleFirestoreError,
+    OperationType
   } = useFirebaseSync();
 
   const [logs, setLogs] = useState<LogsState>({});
@@ -109,6 +124,31 @@ export const useScheduleData = () => {
   const [showSavedIndicator, setShowSavedIndicator] = useState(false);
   const savedTimeoutRef = useRef<any>(null);
   const isLocalMutationRef = useRef<number>(0);
+  const syncVersionRef = useRef<number>(0);
+  const inFlightSyncCountRef = useRef<number>(0);
+  const knownCloudDatesRef = useRef<Set<string>>(new Set());
+  const tombstonesRef = useRef<TombstoneMap>({});
+
+  const latestStateRef = useRef({
+    logs,
+    midCounts,
+    fmlaCases,
+    cardPrefs,
+    settings,
+    lockedMonths
+  });
+
+  useEffect(() => {
+    latestStateRef.current = {
+      logs,
+      midCounts,
+      fmlaCases,
+      cardPrefs,
+      settings,
+      lockedMonths
+    };
+    Object.keys(logs || {}).forEach(d => knownCloudDatesRef.current.add(d));
+  }, [logs, midCounts, fmlaCases, cardPrefs, settings, lockedMonths]);
 
   const triggerSavedIndicator = useCallback(() => {
     setShowSavedIndicator(true);
@@ -123,20 +163,97 @@ export const useScheduleData = () => {
   // Save helper scoped by the current user UID
   const saveToStorage = useCallback((key: string, data: any) => {
     try {
-      const storageKey = getScopedKey(key, user?.uid);
+      const activeUid = auth.currentUser?.uid || user?.uid;
+      const storageKey = getScopedKey(key, activeUid);
       localStorage.setItem(storageKey, typeof data === 'object' ? JSON.stringify(data) : String(data));
     } catch (e) {
       console.warn('Storage save failed:', e);
     }
   }, [user]);
 
+  const hasPendingLocalSync = useCallback((uid?: string | null): boolean => {
+    try {
+      const activeUid = uid ?? auth.currentUser?.uid ?? user?.uid;
+      return localStorage.getItem(getScopedKey('pendingSync', activeUid)) === 'true';
+    } catch {
+      return false;
+    }
+  }, [user]);
+
+  const runBackgroundSync = useCallback(
+    async (
+      payload: any,
+      removedDates: string[],
+      version: number,
+      showSavedOnSuccess = true
+    ): Promise<boolean> => {
+      inFlightSyncCountRef.current += 1;
+      try {
+        const safeLogs = filterLogsWithTombstones(payload.logs || {}, tombstonesRef.current);
+        const enrichedPayload = {
+          ...payload,
+          logs: safeLogs,
+          deletedShiftIds: buildCloudDeletedIdsMap(tombstonesRef.current),
+        };
+
+        const res = await syncToFirebase(enrichedPayload, true, removedDates);
+        if (res.ok) {
+          const mergedTombstones = mergeCloudTombstones(tombstonesRef.current, res.cloudDeletedIds);
+          const prunedTombstones = confirmAndPruneTombstones(mergedTombstones, res.confirmedLogs);
+          tombstonesRef.current = prunedTombstones;
+          saveToStorage('deletedShifts', prunedTombstones);
+
+          if (syncVersionRef.current === version) {
+            knownCloudDatesRef.current = new Set(Object.keys(res.confirmedLogs || {}));
+            saveToStorage('pendingSync', 'false');
+          }
+          if (showSavedOnSuccess) {
+            triggerSavedIndicator();
+          }
+          return true;
+        }
+        setShowSavedIndicator(false);
+        return false;
+      } catch (err) {
+        setShowSavedIndicator(false);
+        console.warn('Background cloud sync failed (queued locally):', err);
+        return false;
+      } finally {
+        inFlightSyncCountRef.current = Math.max(0, inFlightSyncCountRef.current - 1);
+      }
+    },
+    [syncToFirebase, saveToStorage, triggerSavedIndicator]
+  );
+
   // Load helper for a specific user ID or guest
   const loadScopedData = useCallback((uid: string | null) => {
-    // 1. Logs
+    // 0. Load Deleted Shift Tombstones FIRST so deleted shifts never reappear on refresh or year switch
+    let loadedTombstones: TombstoneMap = {};
+    try {
+      const storedTombstones = localStorage.getItem(getScopedKey('deletedShifts', uid));
+      if (storedTombstones && storedTombstones !== 'undefined' && storedTombstones !== 'null') {
+        const parsed = JSON.parse(storedTombstones);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          loadedTombstones = parsed;
+        }
+      }
+    } catch {
+      loadedTombstones = {};
+    }
+    tombstonesRef.current = loadedTombstones;
+
+    // 1. Logs (filtered against tombstones)
+    let loadedLogs: LogsState = {};
     try {
       const storedLogs = localStorage.getItem(getScopedKey('logs', uid));
       if (storedLogs && storedLogs !== 'undefined' && storedLogs !== 'null') {
-        setLogs(JSON.parse(storedLogs));
+        const parsedLogs = JSON.parse(storedLogs);
+        const filtered = filterLogsWithTombstones(parsedLogs, loadedTombstones);
+        loadedLogs = normalizeLogs(autoAssignWorkedHolidays(filtered), false);
+        setLogs(loadedLogs);
+        Object.keys(loadedLogs).forEach(d => knownCloudDatesRef.current.add(d));
+        // Persist normalized IDs & tombstone filtering back to localStorage cleanly
+        localStorage.setItem(getScopedKey('logs', uid), JSON.stringify(loadedLogs));
       } else {
         setLogs({});
       }
@@ -145,10 +262,12 @@ export const useScheduleData = () => {
     }
 
     // 2. MidCounts
+    let loadedMids: MidCountsState = {};
     try {
       const storedMids = localStorage.getItem(getScopedKey('mids', uid));
       if (storedMids && storedMids !== 'undefined' && storedMids !== 'null') {
-        setMidCounts(JSON.parse(storedMids));
+        loadedMids = JSON.parse(storedMids);
+        setMidCounts(loadedMids);
       } else {
         setMidCounts({});
       }
@@ -157,10 +276,12 @@ export const useScheduleData = () => {
     }
 
     // 3. CardPrefs
+    let loadedPrefs: CardPrefs = defaultCardPrefs;
     try {
       const storedPrefs = localStorage.getItem(getScopedKey('cardPrefs', uid));
       if (storedPrefs && storedPrefs !== 'undefined' && storedPrefs !== 'null') {
-        setCardPrefs(JSON.parse(storedPrefs));
+        loadedPrefs = JSON.parse(storedPrefs);
+        setCardPrefs(loadedPrefs);
       } else {
         setCardPrefs(defaultCardPrefs);
       }
@@ -169,10 +290,12 @@ export const useScheduleData = () => {
     }
 
     // 4. FmlaCases
+    let loadedFmla: FmlaCase[] = [];
     try {
       const storedFmla = localStorage.getItem(getScopedKey('fmla', uid));
       if (storedFmla && storedFmla !== 'undefined' && storedFmla !== 'null') {
-        setFmlaCases(JSON.parse(storedFmla));
+        loadedFmla = JSON.parse(storedFmla);
+        setFmlaCases(loadedFmla);
       } else {
         setFmlaCases([]);
       }
@@ -181,10 +304,12 @@ export const useScheduleData = () => {
     }
 
     // 5. LockedMonths
+    let loadedLocked: string[] = [];
     try {
       const storedLockedMonths = localStorage.getItem(getScopedKey('lockedMonths', uid));
       if (storedLockedMonths && storedLockedMonths !== 'undefined' && storedLockedMonths !== 'null') {
-        setLockedMonths(JSON.parse(storedLockedMonths));
+        loadedLocked = JSON.parse(storedLockedMonths);
+        setLockedMonths(loadedLocked);
       } else {
         setLockedMonths([]);
       }
@@ -201,6 +326,15 @@ export const useScheduleData = () => {
       }
     } catch {}
     setSettings(loadedSettings);
+
+    latestStateRef.current = {
+      logs: loadedLogs,
+      midCounts: loadedMids,
+      fmlaCases: loadedFmla,
+      cardPrefs: loadedPrefs,
+      settings: loadedSettings,
+      lockedMonths: loadedLocked
+    };
   }, []);
 
   // Sync state lifecycle across authentication state changes
@@ -218,11 +352,14 @@ export const useScheduleData = () => {
     // Auth state transition
     if (prevUserUid.current !== currentUserUid) {
       prevUserUid.current = currentUserUid;
+      knownCloudDatesRef.current.clear();
+      syncVersionRef.current = 0;
       if (currentUserUid) {
         // Logged in: load user's scoped local data while Firestore attaches
         loadScopedData(currentUserUid);
       } else {
         // Logged out: immediately wipe in-memory state back to clean blank template
+        tombstonesRef.current = {};
         setLogs({});
         setLogsHistory([]);
         setMidCounts({});
@@ -248,52 +385,102 @@ export const useScheduleData = () => {
   // Fetch real-time data from Firestore when user is present
   useEffect(() => {
     if (!user) return;
-    
+
     let isSubscribed = true;
     let unsubscribe: (() => void) | null = null;
 
+    const unconfirmedCount = Object.values(tombstonesRef.current).filter(t => !t.cloudConfirmed).length;
+
+    // If user has unpushed local changes or unconfirmed tombstones (e.g., deleted a shift and reloaded immediately),
+    // push local changes & tombstones to Firestore first so local deletes always win!
+    if (hasPendingLocalSync(user.uid) || unconfirmedCount > 0) {
+      const v = ++syncVersionRef.current;
+      const filteredLocal = normalizeLogs(
+        autoAssignWorkedHolidays(filterLogsWithTombstones(latestStateRef.current.logs, tombstonesRef.current)),
+        false
+      );
+      const removed = Array.from(knownCloudDatesRef.current).filter(d => !(d in filteredLocal));
+      runBackgroundSync(
+        {
+          ...latestStateRef.current,
+          logs: filteredLocal
+        },
+        removed,
+        v,
+        false
+      );
+    }
+
     const handleDocSnapshot = (docSnap: any) => {
-      // Ignore local pending writes to avoid stale or race-condition overwrites
-      if (docSnap.metadata?.hasPendingWrites) {
+      // Never overwrite local state with cached snapshots or local pending writes
+      if (docSnap.metadata?.hasPendingWrites || docSnap.metadata?.fromCache) {
         return;
       }
 
-      // If a local mutation occurred within the last 1500ms, ignore incoming snapshot to let local state settle
-      if (Date.now() - isLocalMutationRef.current < 1500) {
+      // Never overwrite local deletes/mutations that are in-flight, recent, or happened in this session
+      if (
+        inFlightSyncCountRef.current > 0 ||
+        syncVersionRef.current > 0 ||
+        Date.now() - isLocalMutationRef.current < 10000 ||
+        hasPendingLocalSync(user.uid)
+      ) {
         return;
       }
 
       if (docSnap.exists()) {
         const data = docSnap.data();
 
-        if (data.logs !== undefined) {
-          setLogs(data.logs || {});
-          saveToStorage('logs', data.logs || {});
+        if (data.deletedShiftIds && typeof data.deletedShiftIds === 'object') {
+          tombstonesRef.current = mergeCloudTombstones(tombstonesRef.current, data.deletedShiftIds);
+          saveToStorage('deletedShifts', tombstonesRef.current);
         }
 
-        if (data.midCounts) {
-          setMidCounts(data.midCounts);
-          saveToStorage('mids', data.midCounts);
+        // Only hydrate from initial snapshot if local storage had not already been populated for this user
+        const hasExistingLocalLogs = localStorage.getItem(getScopedKey('logs', user.uid)) !== null;
+
+        if (data.logs !== undefined) {
+          const filtered = normalizeLogs(
+            autoAssignWorkedHolidays(
+              filterLogsWithTombstones(data.logs, tombstonesRef.current, data.deletedShiftIds)
+            ),
+            false
+          );
+          Object.keys(filtered).forEach(d => knownCloudDatesRef.current.add(d));
+          if (!hasExistingLocalLogs) {
+            setLogs(filtered);
+            latestStateRef.current.logs = filtered;
+            saveToStorage('logs', filtered);
+          }
         }
-        
-        if (data.fmlaCases) {
+
+        if (data.midCounts !== undefined && !hasExistingLocalLogs) {
+          setMidCounts(data.midCounts || {});
+          latestStateRef.current.midCounts = data.midCounts || {};
+          saveToStorage('mids', data.midCounts || {});
+        }
+
+        if (data.fmlaCases && !hasExistingLocalLogs) {
           setFmlaCases(data.fmlaCases);
+          latestStateRef.current.fmlaCases = data.fmlaCases;
           saveToStorage('fmla', data.fmlaCases);
         }
 
-        if (data.cardPrefs) {
+        if (data.cardPrefs && !hasExistingLocalLogs) {
           setCardPrefs(data.cardPrefs);
+          latestStateRef.current.cardPrefs = data.cardPrefs;
           saveToStorage('cardPrefs', data.cardPrefs);
         }
-        
-        if (data.settings && Object.keys(data.settings).length > 0) {
+
+        if (data.settings && Object.keys(data.settings).length > 0 && !hasExistingLocalLogs) {
           const merged = { ...defaultSettings, ...data.settings };
           setSettings(merged);
+          latestStateRef.current.settings = merged;
           saveToStorage('settings', merged);
         }
 
-        if (data.lockedMonths) {
+        if (data.lockedMonths && !hasExistingLocalLogs) {
           setLockedMonths(data.lockedMonths);
+          latestStateRef.current.lockedMonths = data.lockedMonths;
           saveToStorage('lockedMonths', data.lockedMonths);
         }
       }
@@ -312,13 +499,14 @@ export const useScheduleData = () => {
       unsubscribe = onSnapshot(docRef, handleDocSnapshot, async (error) => {
         const msg = error instanceof Error ? error.message : String(error);
         const isPerm = msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient');
-        
+
         if (isPerm) {
           try {
             await user.getIdToken(true);
             if (isSubscribed) {
               if (unsubscribe) unsubscribe();
               unsubscribe = onSnapshot(docRef, handleDocSnapshot, (retryError) => {
+                reportSyncError(retryError);
                 handleFirestoreError(retryError, OperationType.GET, `users/${user.uid}`);
               });
               return;
@@ -327,6 +515,7 @@ export const useScheduleData = () => {
             // Token refresh failed
           }
         }
+        reportSyncError(error);
         handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
       });
     };
@@ -337,7 +526,7 @@ export const useScheduleData = () => {
       isSubscribed = false;
       if (unsubscribe) unsubscribe();
     };
-  }, [user, db, saveToStorage, handleFirestoreError, OperationType]);
+  }, [user, db, saveToStorage, hasPendingLocalSync, runBackgroundSync, reportSyncError, handleFirestoreError, OperationType]);
 
   useEffect(() => {
     document.body.setAttribute('data-theme', theme);
@@ -352,80 +541,183 @@ export const useScheduleData = () => {
     } catch {}
   }, [isLocked]);
 
-  const updateLogs = useCallback((newLogs: LogsState) => {
-    isLocalMutationRef.current = Date.now();
-    const processedLogs = autoAssignWorkedHolidays(newLogs);
-    setLogsHistory(hist => {
-      const newHist = [...hist, logs];
-      return newHist.slice(-20);
-    });
-    setLogs(processedLogs);
-    saveToStorage('logs', processedLogs);
-    if (user) {
-      syncToFirebase({ logs: processedLogs });
-    }
-    triggerSavedIndicator();
-  }, [logs, user, saveToStorage, triggerSavedIndicator, syncToFirebase]);
+  const updateLogs = useCallback(
+    (newLogs: LogsState, options?: { isRestore?: boolean }) => {
+      isLocalMutationRef.current = Date.now();
+      const version = ++syncVersionRef.current;
+
+      // Assign unique fresh IDs to any newly created shifts lacking an ID
+      const normalizedWithFreshIds = normalizeLogs(newLogs, !options?.isRestore);
+
+      if (options?.isRestore) {
+        tombstonesRef.current = removeRestoredIdsFromTombstones(normalizedWithFreshIds, tombstonesRef.current);
+      } else {
+        const { updatedTombstones } = recordDeletedShifts(
+          latestStateRef.current.logs,
+          normalizedWithFreshIds,
+          tombstonesRef.current
+        );
+        tombstonesRef.current = updatedTombstones;
+      }
+      saveToStorage('deletedShifts', tombstonesRef.current);
+
+      const filteredLogs = filterLogsWithTombstones(normalizedWithFreshIds, tombstonesRef.current);
+      const processedLogs = normalizeLogs(autoAssignWorkedHolidays(filteredLogs), false);
+
+      const prevDates = new Set([
+        ...Object.keys(latestStateRef.current.logs || {}),
+        ...Array.from(knownCloudDatesRef.current)
+      ]);
+      const removedDates = Array.from(prevDates).filter(d => !(d in processedLogs));
+
+      const snapshotForUndo = latestStateRef.current.logs;
+      setLogsHistory(hist => {
+        const newHist = [...hist, snapshotForUndo];
+        return newHist.slice(-20);
+      });
+
+      setLogs(processedLogs);
+      latestStateRef.current.logs = processedLogs;
+      saveToStorage('pendingSync', 'true');
+      saveToStorage('logs', processedLogs);
+
+      if (auth.currentUser || user) {
+        // Immediately sync local shift additions/deletions to Firestore; only show "Changes Saved" when sync succeeds
+        runBackgroundSync(
+          {
+            ...latestStateRef.current,
+            logs: processedLogs
+          },
+          removedDates,
+          version,
+          true
+        );
+      } else {
+        triggerSavedIndicator();
+      }
+    },
+    [user, saveToStorage, triggerSavedIndicator, runBackgroundSync]
+  );
 
   const undoLogs = useCallback(() => {
     if (logsHistory.length === 0) return;
-    const previous = logsHistory[logsHistory.length - 1];
+    isLocalMutationRef.current = Date.now();
+    const version = ++syncVersionRef.current;
+    const rawPrevious = cleanLogsObject(logsHistory[logsHistory.length - 1]);
+
+    // Remove restored shift IDs from tombstones so Undo can bring back the last deleted shift intentionally
+    const afterRestoreTombstones = removeRestoredIdsFromTombstones(rawPrevious, tombstonesRef.current);
+    const { updatedTombstones } = recordDeletedShifts(
+      latestStateRef.current.logs,
+      rawPrevious,
+      afterRestoreTombstones
+    );
+    tombstonesRef.current = updatedTombstones;
+    saveToStorage('deletedShifts', tombstonesRef.current);
+
+    const previous = normalizeLogs(
+      autoAssignWorkedHolidays(filterLogsWithTombstones(rawPrevious, tombstonesRef.current)),
+      false
+    );
+
+    const prevDates = new Set([
+      ...Object.keys(latestStateRef.current.logs || {}),
+      ...Array.from(knownCloudDatesRef.current)
+    ]);
+    const removedDates = Array.from(prevDates).filter(d => !(d in previous));
+
     setLogs(previous);
+    latestStateRef.current.logs = previous;
     setLogsHistory(hist => hist.slice(0, -1));
+    saveToStorage('pendingSync', 'true');
     saveToStorage('logs', previous);
-    if (user) {
-      syncToFirebase({ logs: previous });
+    if (auth.currentUser || user) {
+      runBackgroundSync(
+        {
+          ...latestStateRef.current,
+          logs: previous
+        },
+        removedDates,
+        version,
+        true
+      );
+    } else {
+      triggerSavedIndicator();
     }
-    triggerSavedIndicator();
-  }, [logsHistory, user, saveToStorage, triggerSavedIndicator, syncToFirebase]);
+  }, [logsHistory, user, saveToStorage, triggerSavedIndicator, runBackgroundSync]);
 
   const updateMidCounts = useCallback((newMids: MidCountsState) => {
+    isLocalMutationRef.current = Date.now();
+    const version = ++syncVersionRef.current;
     setMidCounts(newMids);
+    latestStateRef.current.midCounts = newMids;
+    saveToStorage('pendingSync', 'true');
     saveToStorage('mids', newMids);
-    if (user) {
-      syncToFirebase({ midCounts: newMids });
+    if (auth.currentUser || user) {
+      runBackgroundSync({ ...latestStateRef.current, midCounts: newMids }, [], version, true);
+    } else {
+      triggerSavedIndicator();
     }
-    triggerSavedIndicator();
-  }, [user, saveToStorage, triggerSavedIndicator, syncToFirebase]);
+  }, [user, saveToStorage, triggerSavedIndicator, runBackgroundSync]);
 
   const updateFmlaCases = useCallback((newCases: FmlaCase[]) => {
+    isLocalMutationRef.current = Date.now();
+    const version = ++syncVersionRef.current;
     setFmlaCases(newCases);
+    latestStateRef.current.fmlaCases = newCases;
+    saveToStorage('pendingSync', 'true');
     saveToStorage('fmla', newCases);
-    if (user) {
-      syncToFirebase({ fmlaCases: newCases });
+    if (auth.currentUser || user) {
+      runBackgroundSync({ ...latestStateRef.current, fmlaCases: newCases }, [], version, true);
+    } else {
+      triggerSavedIndicator();
     }
-    triggerSavedIndicator();
-  }, [user, saveToStorage, triggerSavedIndicator, syncToFirebase]);
+  }, [user, saveToStorage, triggerSavedIndicator, runBackgroundSync]);
 
-  const updateSettings = useCallback((newSettings: Partial<Settings>) => {
-    const updated = { ...settings, ...newSettings };
+  const updateSettings = useCallback((newSettings: Partial<Settings>, silentIndicator = false) => {
+    isLocalMutationRef.current = Date.now();
+    const version = ++syncVersionRef.current;
+    const updated = { ...latestStateRef.current.settings, ...newSettings };
     setSettings(updated);
+    latestStateRef.current.settings = updated;
+    saveToStorage('pendingSync', 'true');
     saveToStorage('settings', updated);
-    if (user) {
-      syncToFirebase({ settings: updated });
+    if (auth.currentUser || user) {
+      runBackgroundSync({ ...latestStateRef.current, settings: updated }, [], version, !silentIndicator);
+    } else if (!silentIndicator) {
+      triggerSavedIndicator();
     }
-    triggerSavedIndicator();
-  }, [settings, user, saveToStorage, triggerSavedIndicator, syncToFirebase]);
+  }, [user, saveToStorage, triggerSavedIndicator, runBackgroundSync]);
 
   const overwriteSettings = useCallback((allSettings: Settings) => {
     if (!allSettings || typeof allSettings !== 'object') return;
+    isLocalMutationRef.current = Date.now();
+    const version = ++syncVersionRef.current;
     const mergedSettings = { ...defaultSettings, ...allSettings };
     setSettings(mergedSettings);
+    latestStateRef.current.settings = mergedSettings;
+    saveToStorage('pendingSync', 'true');
     saveToStorage('settings', mergedSettings);
-    if (user) {
-      syncToFirebase({ settings: mergedSettings });
+    if (auth.currentUser || user) {
+      runBackgroundSync({ ...latestStateRef.current, settings: mergedSettings }, [], version, true);
+    } else {
+      triggerSavedIndicator();
     }
-    triggerSavedIndicator();
-  }, [user, saveToStorage, triggerSavedIndicator, syncToFirebase]);
+  }, [user, saveToStorage, triggerSavedIndicator, runBackgroundSync]);
 
   const updateCardPrefs = useCallback((newPrefs: CardPrefs) => {
+    isLocalMutationRef.current = Date.now();
+    const version = ++syncVersionRef.current;
     setCardPrefs(newPrefs);
+    latestStateRef.current.cardPrefs = newPrefs;
+    saveToStorage('pendingSync', 'true');
     saveToStorage('cardPrefs', newPrefs);
-    if (user) {
-      syncToFirebase({ cardPrefs: newPrefs });
+    if (auth.currentUser || user) {
+      runBackgroundSync({ ...latestStateRef.current, cardPrefs: newPrefs }, [], version, true);
+    } else {
+      triggerSavedIndicator();
     }
-    triggerSavedIndicator();
-  }, [user, saveToStorage, triggerSavedIndicator, syncToFirebase]);
+  }, [user, saveToStorage, triggerSavedIndicator, runBackgroundSync]);
 
   const toggleTheme = (newTheme?: ThemeType) => {
     if (newTheme) {
@@ -439,13 +731,47 @@ export const useScheduleData = () => {
     }
   };
 
-  const clearLogs = () => {
-    updateLogs({});
-    updateMidCounts({});
-    if (user) {
-      syncToFirebase({ logs: {}, midCounts: {} });
+  const clearLogs = useCallback(async () => {
+    isLocalMutationRef.current = Date.now();
+    const version = ++syncVersionRef.current;
+
+    const { updatedTombstones } = recordDeletedShifts(
+      latestStateRef.current.logs,
+      {},
+      tombstonesRef.current
+    );
+    tombstonesRef.current = updatedTombstones;
+    saveToStorage('deletedShifts', tombstonesRef.current);
+
+    const removedDates = Array.from(new Set([
+      ...Object.keys(latestStateRef.current.logs || {}),
+      ...Array.from(knownCloudDatesRef.current)
+    ]));
+    knownCloudDatesRef.current.clear();
+
+    setLogs({});
+    setMidCounts({});
+    latestStateRef.current.logs = {};
+    latestStateRef.current.midCounts = {};
+    saveToStorage('pendingSync', 'true');
+    saveToStorage('logs', {});
+    saveToStorage('mids', {});
+
+    if (auth.currentUser || user) {
+      await runBackgroundSync(
+        {
+          ...latestStateRef.current,
+          logs: {},
+          midCounts: {}
+        },
+        removedDates,
+        version,
+        true
+      );
+    } else {
+      triggerSavedIndicator();
     }
-  };
+  }, [user, saveToStorage, runBackgroundSync, triggerSavedIndicator]);
 
   const changeMonth = (n: number) => {
     setDirection(n);
@@ -463,123 +789,212 @@ export const useScheduleData = () => {
   };
 
   const toggleLockMonth = useCallback((year: number, month: number) => {
+    isLocalMutationRef.current = Date.now();
+    const version = ++syncVersionRef.current;
     const key = `${year}-${String(month + 1).padStart(2, '0')}`;
-    setLockedMonths(prev => {
-      const updated = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
-      saveToStorage('lockedMonths', updated);
-      if (user) {
-        syncToFirebase({ lockedMonths: updated });
-      }
-      return updated;
-    });
-    triggerSavedIndicator();
-  }, [user, saveToStorage, triggerSavedIndicator, syncToFirebase]);
+    const prev = latestStateRef.current.lockedMonths || [];
+    const updated = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
+    setLockedMonths(updated);
+    latestStateRef.current.lockedMonths = updated;
+    saveToStorage('pendingSync', 'true');
+    saveToStorage('lockedMonths', updated);
+    if (auth.currentUser || user) {
+      runBackgroundSync({ ...latestStateRef.current, lockedMonths: updated }, [], version, true);
+    } else {
+      triggerSavedIndicator();
+    }
+  }, [user, saveToStorage, triggerSavedIndicator, runBackgroundSync]);
 
   const pullFromCloud = useCallback(async () => {
-    if (!user) return false;
-    const docRef = doc(db, 'users', user.uid);
+    const activeUser = auth.currentUser || user;
+    if (!activeUser) return false;
+
+    setCloudSyncState('syncing');
+
+    // Wait briefly if a push is currently in-flight so Pull never reads pre-push state
+    const waitStart = Date.now();
+    while (inFlightSyncCountRef.current > 0 && Date.now() - waitStart < 3500) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    const docRef = doc(db, 'users', activeUser.uid);
     try {
-      let docSnap;
+      let data: any = null;
+
+      // 1. Direct REST pull against Firestore v1 API (cache: 'no-store', zero invalid query params)
       try {
-        docSnap = await getDoc(docRef);
-      } catch (getErr: any) {
-        const msg = getErr instanceof Error ? getErr.message : String(getErr);
-        if (msg.toLowerCase().includes('offline') || msg.toLowerCase().includes('unavailable') || getErr?.code === 'unavailable') {
-          try {
-            docSnap = await getDocFromCache(docRef);
-          } catch {
-            return false;
-          }
-        } else if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient') || getErr?.code === 'permission-denied') {
-          try {
-            await user.getIdToken(true);
-            docSnap = await getDoc(docRef);
-          } catch (retryErr) {
-            throw retryErr;
-          }
+        const restData = await directRestPull(activeUser);
+        if (restData?.__notFound) {
+          reportSyncSuccess();
+          return false;
+        }
+        if (restData && typeof restData === 'object') {
+          data = restData;
+        }
+      } catch (restErr: any) {
+        const msg = restErr instanceof Error ? restErr.message : String(restErr);
+        // Surface HTTP 4xx errors (400/401/403) immediately rather than hiding them behind cached reads
+        if (msg.includes('HTTP 4')) {
+          throw restErr;
+        }
+        // Only fall back to getDocFromServer for transient network hiccups (never getDocFromCache!)
+        const docSnap = await getDocFromServer(docRef);
+        if (!docSnap || !docSnap.exists()) {
+          reportSyncSuccess();
+          return false;
+        }
+        data = docSnap.data();
+      }
+
+      if (data && typeof data === 'object') {
+        const rawCloudLogsNormalized = normalizeLogs(data.logs, false);
+
+        // Merge cloud deletedShiftIds with local tombstones so a deleted shift NEVER comes back on Pull
+        const mergedTombstones = mergeCloudTombstones(tombstonesRef.current, data.deletedShiftIds);
+
+        const filteredCloudLogs = filterLogsWithTombstones(
+          rawCloudLogsNormalized,
+          mergedTombstones,
+          data.deletedShiftIds
+        );
+        const finalCloudLogs = normalizeLogs(autoAssignWorkedHolidays(filteredCloudLogs), false);
+
+        // Detect if raw cloud logs still contained any tombstoned shifts (e.g. from another device or an unconfirmed delete)
+        let rawCount = 0;
+        let filteredCount = 0;
+        Object.values(rawCloudLogsNormalized).forEach(arr => {
+          rawCount += arr.filter(e => e.type !== 'HOL-W').length;
+        });
+        Object.values(filteredCloudLogs).forEach(arr => {
+          filteredCount += arr.filter(e => e.type !== 'HOL-W').length;
+        });
+        const cloudHadStaleDeletedShifts = rawCount > filteredCount;
+
+        if (!cloudHadStaleDeletedShifts) {
+          tombstonesRef.current = confirmAndPruneTombstones(mergedTombstones, finalCloudLogs);
         } else {
-          throw getErr;
+          tombstonesRef.current = mergedTombstones;
         }
-      }
+        saveToStorage('deletedShifts', tombstonesRef.current);
 
-      if (!docSnap || !docSnap.exists()) {
-        try {
-          const restData = await directRestPull(user);
-          if (restData) {
-            docSnap = { exists: () => true, data: () => restData } as any;
-          }
-        } catch (restErr) {
-          console.warn('Direct REST pull fallback note:', restErr);
-        }
-      }
+        knownCloudDatesRef.current = new Set(Object.keys(finalCloudLogs));
 
-      if (docSnap && docSnap.exists()) {
-        const data = docSnap.data();
-        let loaded = false;
-        if (data.logs && Object.keys(data.logs).length > 0) {
-          setLogs(data.logs);
-          saveToStorage('logs', data.logs);
-          loaded = true;
-        }
-        if (data.midCounts) {
-          setMidCounts(data.midCounts);
-          saveToStorage('mids', data.midCounts);
-        }
-        if (data.fmlaCases) {
+        setLogs(finalCloudLogs);
+        latestStateRef.current.logs = finalCloudLogs;
+        saveToStorage('logs', finalCloudLogs);
+        saveToStorage('pendingSync', cloudHadStaleDeletedShifts ? 'true' : 'false');
+
+        const cloudMids = data.midCounts && typeof data.midCounts === 'object' ? data.midCounts : {};
+        setMidCounts(cloudMids);
+        latestStateRef.current.midCounts = cloudMids;
+        saveToStorage('mids', cloudMids);
+
+        if (Array.isArray(data.fmlaCases)) {
           setFmlaCases(data.fmlaCases);
+          latestStateRef.current.fmlaCases = data.fmlaCases;
           saveToStorage('fmla', data.fmlaCases);
         }
-        if (data.cardPrefs) {
+        if (data.cardPrefs && typeof data.cardPrefs === 'object') {
           setCardPrefs(data.cardPrefs);
+          latestStateRef.current.cardPrefs = data.cardPrefs;
           saveToStorage('cardPrefs', data.cardPrefs);
         }
-        if (data.settings && Object.keys(data.settings).length > 0) {
+        if (data.settings && typeof data.settings === 'object' && Object.keys(data.settings).length > 0) {
           const merged = { ...defaultSettings, ...data.settings };
           setSettings(merged);
+          latestStateRef.current.settings = merged;
           saveToStorage('settings', merged);
-          loaded = true;
         }
-        if (data.lockedMonths) {
+        if (Array.isArray(data.lockedMonths)) {
           setLockedMonths(data.lockedMonths);
+          latestStateRef.current.lockedMonths = data.lockedMonths;
           saveToStorage('lockedMonths', data.lockedMonths);
         }
-        return loaded;
-      } else {
-        return false;
+
+        reportSyncSuccess();
+
+        // If cloud copy still had shifts on our tombstone list, push the cleaned mirror back to cloud immediately
+        if (cloudHadStaleDeletedShifts) {
+          const v = ++syncVersionRef.current;
+          const removedDates = Object.keys(rawCloudLogsNormalized).filter(d => !(d in finalCloudLogs));
+          runBackgroundSync(
+            {
+              ...latestStateRef.current,
+              logs: finalCloudLogs
+            },
+            removedDates,
+            v,
+            false
+          );
+        }
+
+        return true;
       }
-    } catch (e: any) {
-      console.warn('Pull from cloud skipped/failed:', e);
+
+      reportSyncSuccess();
       return false;
+    } catch (e: any) {
+      setShowSavedIndicator(false);
+      reportSyncError(e);
+      throw e;
     }
-  }, [user, db, saveToStorage]);
+  }, [user, db, saveToStorage, setCloudSyncState, reportSyncSuccess, reportSyncError, runBackgroundSync]);
 
   const forceSyncToCloud = useCallback(async () => {
-    if (!user) return false;
+    const activeUser = auth.currentUser || user;
+    if (!activeUser) return false;
     isLocalMutationRef.current = Date.now();
+    const version = ++syncVersionRef.current;
+    inFlightSyncCountRef.current += 1;
     try {
+      const filteredLocal = filterLogsWithTombstones(latestStateRef.current.logs, tombstonesRef.current);
+      const cleanedLogs = normalizeLogs(autoAssignWorkedHolidays(filteredLocal), false);
+      const removedDates = Array.from(knownCloudDatesRef.current).filter(d => !(d in cleanedLogs));
+
       const fullData = {
-        logs,
-        midCounts,
-        fmlaCases,
-        cardPrefs,
-        settings,
-        lockedMonths
+        logs: cleanedLogs,
+        deletedShiftIds: buildCloudDeletedIdsMap(tombstonesRef.current),
+        midCounts: latestStateRef.current.midCounts || {},
+        fmlaCases: latestStateRef.current.fmlaCases || [],
+        cardPrefs: latestStateRef.current.cardPrefs || defaultCardPrefs,
+        settings: latestStateRef.current.settings || defaultSettings,
+        lockedMonths: latestStateRef.current.lockedMonths || []
       };
-      // Authoritative overwrite: passes isAuthoritative=true to replace the entire remote document
-      const success = await syncToFirebase(fullData, true);
-      if (success) {
+
+      setLogs(cleanedLogs);
+      latestStateRef.current.logs = cleanedLogs;
+      saveToStorage('logs', cleanedLogs);
+
+      // Authoritative overwrite: mirrors local data in Firestore, deleting any removed shifts or days
+      const res = await syncToFirebase(fullData, true, removedDates);
+      if (res.ok) {
+        const mergedTombstones = mergeCloudTombstones(tombstonesRef.current, res.cloudDeletedIds);
+        const prunedTombstones = confirmAndPruneTombstones(mergedTombstones, res.confirmedLogs);
+        tombstonesRef.current = prunedTombstones;
+        saveToStorage('deletedShifts', prunedTombstones);
+
+        knownCloudDatesRef.current = new Set(Object.keys(res.confirmedLogs));
+        if (syncVersionRef.current === version) {
+          saveToStorage('pendingSync', 'false');
+        }
         triggerSavedIndicator();
         return true;
       }
+      setShowSavedIndicator(false);
       return false;
     } catch (e) {
+      setShowSavedIndicator(false);
       console.warn('Force sync to cloud failed:', e);
       throw e;
+    } finally {
+      inFlightSyncCountRef.current = Math.max(0, inFlightSyncCountRef.current - 1);
     }
-  }, [user, logs, midCounts, fmlaCases, cardPrefs, settings, lockedMonths, syncToFirebase, triggerSavedIndicator]);
+  }, [user, syncToFirebase, saveToStorage, triggerSavedIndicator]);
 
   // Clean logout wrapper: immediately purges all sensitive in-memory state
   const logout = useCallback(async () => {
+    knownCloudDatesRef.current.clear();
+    tombstonesRef.current = {};
     setLogs({});
     setLogsHistory([]);
     setMidCounts({});
@@ -592,6 +1007,7 @@ export const useScheduleData = () => {
 
   return {
     user, login, logout, isInitializingAuth,
+    cloudSyncState, cloudSyncError,
     logs, updateLogs, undoLogs, logsHistory,
     midCounts, updateMidCounts,
     fmlaCases, updateFmlaCases,
