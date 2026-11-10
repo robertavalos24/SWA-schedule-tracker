@@ -1,9 +1,9 @@
 import { LogEntry, LogsState, ShiftTombstone, TombstoneMap } from '../types';
 
-// Keep confirmed tombstones for 14 days so offline/secondary devices also drop deleted shifts on Pull/merge.
-// Unconfirmed tombstones (cloudConfirmed === false) are NEVER pruned until the cloud confirms the delete.
-const CONFIRMED_TOMBSTONE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
-const MAX_CONFIRMED_TOMBSTONES = 400;
+// Keep confirmed tombstones for 180 days so offline/secondary devices also drop deleted shifts on Pull/merge.
+// Unconfirmed tombstones (cloudConfirmed === false) are NEVER pruned until a fresh read of the cloud copy confirms the shift is gone.
+export const CONFIRMED_TOMBSTONE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
+export const MAX_CONFIRMED_TOMBSTONES = 400;
 
 export function generateShiftId(): string {
   return `sh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -11,9 +11,10 @@ export function generateShiftId(): string {
 
 export function isValidFirestoreFieldKey(key: string): boolean {
   if (typeof key !== 'string') return false;
+  if (key.length === 0) return false;
   const trimmed = key.trim();
   if (trimmed.length === 0) return false;
-  if (/^__.*__$/.test(trimmed)) return false;
+  if (/^__.*__$/.test(key) || /^__.*__$/.test(trimmed)) return false;
   return true;
 }
 
@@ -231,8 +232,7 @@ export function mergeCloudTombstones(
         id,
         date: '',
         deletedAt,
-        cloudConfirmed: true,
-        confirmedAt: now,
+        cloudConfirmed: false,
       };
     }
   }
@@ -240,16 +240,22 @@ export function mergeCloudTombstones(
 }
 
 /**
- * Marks tombstones as confirmed once Firestore confirms the delete, and clears old entries
- * ONLY after `cloudConfirmed === true`. Unconfirmed tombstones are never cleared.
+ * Marks tombstones as confirmed ONLY when a fresh read of the cloud copy shows the shift is gone
+ * (never based on the outgoing payload we just sent), and clears old entries ONLY after
+ * `cloudConfirmed === true` and 180 days (`CONFIRMED_TOMBSTONE_TTL_MS`) have elapsed.
  */
 export function confirmAndPruneTombstones(
   tombstones: TombstoneMap,
-  confirmedLogsInCloud: LogsState,
+  freshCloudLogs: LogsState | null | undefined,
   now = Date.now()
 ): TombstoneMap {
+  // Without a fresh read of the cloud copy, never mark unconfirmed tombstones as confirmed or prune them
+  if (freshCloudLogs === null || freshCloudLogs === undefined || typeof freshCloudLogs !== 'object') {
+    return { ...(tombstones || {}) };
+  }
+
   const cloudShiftIds = new Set<string>();
-  const normalizedCloud = normalizeLogs(confirmedLogsInCloud, false);
+  const normalizedCloud = normalizeLogs(freshCloudLogs, false);
   for (const [dateKey, entries] of Object.entries(normalizedCloud)) {
     const sigCounts: Record<string, number> = {};
     for (const entry of entries) {
@@ -267,21 +273,25 @@ export function confirmAndPruneTombstones(
   for (const [id, item] of Object.entries(tombstones || {})) {
     if (!isValidFirestoreFieldKey(id) || !item) continue;
 
-    // A tombstone is confirmed once the cloud write succeeded AND the shift is absent from the cloud copy
-    const isAbsentInCloud = !cloudShiftIds.has(id);
-    const isConfirmed = item.cloudConfirmed || isAbsentInCloud;
+    // A tombstone is confirmed ONLY if a fresh read of the cloud copy shows the shift is actually gone
+    const isGoneInFreshCloudRead = !cloudShiftIds.has(id);
 
-    if (!isConfirmed) {
-      // Never clear unconfirmed tombstones
-      next[id] = { ...item, cloudConfirmed: false };
+    if (!isGoneInFreshCloudRead) {
+      // Shift still exists in cloud — keep unconfirmed and never prune
+      next[id] = {
+        ...item,
+        id,
+        cloudConfirmed: false,
+        confirmedAt: undefined,
+      };
       continue;
     }
 
-    const confirmedAt = item.confirmedAt || now;
-    const age = now - Math.min(item.deletedAt || now, confirmedAt);
+    const confirmedAt = item.cloudConfirmed && item.confirmedAt ? item.confirmedAt : now;
+    const ageSinceConfirmed = now - confirmedAt;
 
-    // Clear old entries ONLY after cloud confirms the delete and TTL has elapsed
-    if (age <= CONFIRMED_TOMBSTONE_TTL_MS) {
+    // Clear old entries ONLY after cloud confirms the delete and 180-day TTL has elapsed
+    if (ageSinceConfirmed <= CONFIRMED_TOMBSTONE_TTL_MS) {
       confirmedList.push({
         ...item,
         id,
@@ -291,8 +301,8 @@ export function confirmAndPruneTombstones(
     }
   }
 
-  // Keep most recent confirmed tombstones up to MAX_CONFIRMED_TOMBSTONES
-  confirmedList.sort((a, b) => b.deletedAt - a.deletedAt);
+  // Keep most recent confirmed tombstones up to MAX_CONFIRMED_TOMBSTONES (400)
+  confirmedList.sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
   for (const item of confirmedList.slice(0, MAX_CONFIRMED_TOMBSTONES)) {
     next[item.id] = item;
   }
@@ -301,22 +311,67 @@ export function confirmAndPruneTombstones(
 }
 
 /**
- * Exports compact `{ [shiftId]: deletedAt }` map to store in Firestore `users/{uid}.deletedShiftIds`
- * so other devices pulling or merging never bring deleted shifts back.
+ * Caps a `{ [shiftId]: deletedAtMs }` map at the newest `maxEntries` (default 400)
+ * so the Firestore document's `deletedShiftIds` map cannot grow unboundedly.
  */
-export function buildCloudDeletedIdsMap(tombstones: TombstoneMap): Record<string, number> {
+export function capCloudDeletedIds(
+  idsMap: Record<string, any> | null | undefined,
+  maxEntries = MAX_CONFIRMED_TOMBSTONES
+): Record<string, number> {
+  if (!idsMap || typeof idsMap !== 'object') return {};
+  const now = Date.now();
+  const validPairs: [string, number][] = [];
+
+  for (const [rawKey, rawTs] of Object.entries(idsMap)) {
+    if (!isValidFirestoreFieldKey(rawKey)) continue;
+    const ts = typeof rawTs === 'number' && Number.isFinite(rawTs) ? Math.trunc(rawTs) : now;
+    validPairs.push([rawKey.trim(), ts]);
+  }
+
+  validPairs.sort((a, b) => b[1] - a[1]);
+
   const out: Record<string, number> = {};
-  for (const [id, t] of Object.entries(tombstones || {})) {
-    if (isValidFirestoreFieldKey(id) && t) {
-      out[id] = typeof t.deletedAt === 'number' && Number.isFinite(t.deletedAt) ? Math.trunc(t.deletedAt) : Date.now();
-    }
+  for (const [key, ts] of validPairs.slice(0, maxEntries)) {
+    out[key] = ts;
   }
   return out;
 }
 
 /**
+ * Exports compact `{ [shiftId]: deletedAt }` map (capped at newest 400) to store in Firestore `users/{uid}.deletedShiftIds`.
+ */
+export function buildCloudDeletedIdsMap(tombstones: TombstoneMap): Record<string, number> {
+  const raw: Record<string, number> = {};
+  for (const [id, t] of Object.entries(tombstones || {})) {
+    if (isValidFirestoreFieldKey(id) && t) {
+      raw[id] = typeof t.deletedAt === 'number' && Number.isFinite(t.deletedAt) ? Math.trunc(t.deletedAt) : Date.now();
+    }
+  }
+  return capCloudDeletedIds(raw, MAX_CONFIRMED_TOMBSTONES);
+}
+
+/**
+ * Recursively checks whether an object contains any empty "" or `__reserved__` keys.
+ */
+export function hasInvalidFirestoreKeys(val: any): boolean {
+  if (!val || typeof val !== 'object') return false;
+  if (Array.isArray(val)) {
+    return val.some(item => hasInvalidFirestoreKeys(item));
+  }
+  for (const [k, v] of Object.entries(val)) {
+    if (!isValidFirestoreFieldKey(k)) {
+      return true;
+    }
+    if (hasInvalidFirestoreKeys(v)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Deeply sanitizes a payload before sending to Firestore REST or SDK:
- * - Removes empty string object keys ("") and reserved `__.*__` keys that cause HTTP 400
+ * - Removes empty string object/date keys ("") and reserved `__.*__` keys without altering real shifts
  * - Removes transient `_origIdx` and `undefined` fields
  * - Replaces NaN / Infinity numbers with 0
  */

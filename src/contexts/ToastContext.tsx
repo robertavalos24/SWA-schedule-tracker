@@ -30,9 +30,10 @@ export const ToastProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const id = Math.random().toString(36).substr(2, 9);
     setToasts((prev) => [...prev, { id, message, type }]);
     
+    const duration = type === 'error' ? 6500 : 3000;
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3000);
+    }, duration);
   }, []);
 
   const removeToast = (id: string) => {
@@ -42,21 +43,21 @@ export const ToastProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      <div className="fixed top-4 right-4 z-[2000] flex flex-col gap-2 pointer-events-none">
+      <div className="fixed top-4 right-4 z-[2000] flex flex-col gap-2 pointer-events-none max-w-[92vw] sm:max-w-lg">
         {toasts.map((toast) => (
           <div 
             key={toast.id} 
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border pointer-events-auto transform transition-all duration-300 translate-y-0 opacity-100 ${
+            className={`flex items-start gap-3 px-4 py-3 rounded-xl shadow-lg border pointer-events-auto transform transition-all duration-300 translate-y-0 opacity-100 ${
               toast.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-900/80 dark:border-emerald-800 dark:text-emerald-100' :
               toast.type === 'error' ? 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/80 dark:border-red-800 dark:text-red-100' :
               'bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-900/80 dark:border-blue-800 dark:text-blue-100'
             }`}
           >
-            {toast.type === 'success' && <CheckCircle2 size={18} className="text-emerald-500 dark:text-emerald-400" />}
-            {toast.type === 'error' && <AlertCircle size={18} className="text-red-500 dark:text-red-400" />}
-            {toast.type === 'info' && <Info size={18} className="text-blue-500 dark:text-blue-400" />}
+            {toast.type === 'success' && <CheckCircle2 size={18} className="text-emerald-500 dark:text-emerald-400 shrink-0 mt-0.5" />}
+            {toast.type === 'error' && <AlertCircle size={18} className="text-red-500 dark:text-red-400 shrink-0 mt-0.5" />}
+            {toast.type === 'info' && <Info size={18} className="text-blue-500 dark:text-blue-400 shrink-0 mt-0.5" />}
             
-            <span className="text-sm font-medium">{toast.message}</span>
+            <span className="text-sm font-medium break-words">{toast.message}</span>
             
             <button 
               onClick={() => removeToast(toast.id)}

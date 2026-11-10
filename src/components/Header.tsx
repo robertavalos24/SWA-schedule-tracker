@@ -139,11 +139,11 @@ export const Header: React.FC<HeaderProps> = ({
                   <RefreshCw size={12} className="text-sky-300 animate-spin shrink-0" />
                   <span className="hidden md:inline">Syncing...</span>
                 </button>
-              ) : (
+              ) : cloudSyncState === 'synced' ? (
                 <button 
                   className="bg-emerald-500/20 text-emerald-200 border border-emerald-400/30 rounded-lg px-2 sm:px-2.5 py-1 text-[11px] font-bold hover:bg-emerald-500/30 transition-all flex items-center gap-1.5 cursor-pointer"
                   onClick={() => openModal('cloudStatus')}
-                  title={`Signed in as ${user.email}. Click for Cloud & Firebase Diagnostics.`}
+                  title={`Cloud synced as ${user.email}. Click for Cloud & Firebase Diagnostics.`}
                 >
                   {user.photoURL ? (
                     <img src={user.photoURL} alt="Profile" className="w-3.5 h-3.5 rounded-full" />
@@ -151,6 +151,19 @@ export const Header: React.FC<HeaderProps> = ({
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                   )}
                   <span className="hidden md:inline">Cloud Active</span>
+                </button>
+              ) : (
+                <button
+                  className="bg-white/15 text-white/90 border border-white/25 rounded-lg px-2 sm:px-2.5 py-1 text-[11px] font-bold hover:bg-white/25 transition-all flex items-center gap-1.5 cursor-pointer"
+                  onClick={() => openModal('cloudStatus')}
+                  title={`Signed in as ${user.email} (waiting for Push or Pull). Click for Cloud Diagnostics.`}
+                >
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="Profile" className="w-3.5 h-3.5 rounded-full" />
+                  ) : (
+                    <Cloud size={12} className="text-white/80 shrink-0" />
+                  )}
+                  <span className="hidden md:inline">Signed In</span>
                 </button>
               )}
 

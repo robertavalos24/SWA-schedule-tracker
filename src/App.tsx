@@ -175,7 +175,7 @@ export default function App() {
       }
 
       if (changed) {
-        updateSettings(newSettings, true);
+        updateSettings(newSettings, { localOnly: true });
       }
       lastViewedYearRef.current = newYear;
     }
@@ -438,7 +438,17 @@ export default function App() {
   };
 
    const executeSave = (type: string, fmlaCaseNum = '', overrideHrs?: string, extraOptions?: any) => {
-    const d = new Date(activeDate + "T00:00:00");
+    const trimmedDate = typeof activeDate === 'string' ? activeDate.trim() : '';
+    if (!trimmedDate || !/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+      showToast("Please select a valid date before saving a shift.", "error");
+      return;
+    }
+
+    const d = new Date(trimmedDate + "T00:00:00");
+    if (isNaN(d.getTime())) {
+      showToast("Invalid date selected. Could not save shift.", "error");
+      return;
+    }
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     if (isLocked || lockedMonths.includes(key)) {
       showToast("This month is locked. Please unlock it to modify entries.", "error");
@@ -446,10 +456,10 @@ export default function App() {
     }
 
     const newLogs = { ...logs };
-    if (!newLogs[activeDate] || !Array.isArray(newLogs[activeDate])) newLogs[activeDate] = [];
+    if (!newLogs[trimmedDate] || !Array.isArray(newLogs[trimmedDate])) newLogs[trimmedDate] = [];
     
     const h = parseFloat(overrideHrs || logHrs) || 8;
-    const dayEntries = [...(newLogs[activeDate] || [])];
+    const dayEntries = [...(newLogs[trimmedDate] || [])];
     
     const isWorkShift = (t: string) => t === 'WORK' || t.startsWith('WORK-');
     if (isWorkShift(type)) {
@@ -472,14 +482,14 @@ export default function App() {
 
     const { entries, warning } = processEntryWithBalances(
       entry,
-      activeDate,
+      trimmedDate,
       newLogs,
       dayEntries,
       settings,
       fmlaCases
     );
 
-    newLogs[activeDate] = [...dayEntries, ...entries];
+    newLogs[trimmedDate] = [...dayEntries, ...entries];
     updateLogs(newLogs);
     closeModal('addBlock');
     
@@ -490,13 +500,22 @@ export default function App() {
   };
 
   const handleQuickShiftSave = (type: string, hrs: string = '8', extraOptions: any = {}, targetDate?: string) => {
-    const dStr = targetDate || activeDate || (() => {
+    const rawDate = (targetDate || activeDate || '').trim();
+    const dStr = rawDate || (() => {
       const d = new Date();
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     })();
+    if (!dStr || !/^\d{4}-\d{2}-\d{2}$/.test(dStr)) {
+      showToast("Please select a valid date before saving a shift.", "error");
+      return;
+    }
     setActiveDate(dStr);
 
     const d = new Date(dStr + "T00:00:00");
+    if (isNaN(d.getTime())) {
+      showToast("Invalid date selected. Could not save shift.", "error");
+      return;
+    }
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     if (isLocked || lockedMonths.includes(key)) {
       showToast("This month is locked. Please unlock it to modify entries.", "error");
@@ -678,7 +697,16 @@ export default function App() {
   };
 
   const addManualInfraction = (ds: string, type: string, hrs: number, cover: boolean) => {
-    const d = new Date(ds + "T00:00:00");
+    const trimmedDs = typeof ds === 'string' ? ds.trim() : '';
+    if (!trimmedDs || !/^\d{4}-\d{2}-\d{2}$/.test(trimmedDs)) {
+      showToast("Please select a valid date before adding an infraction.", "error");
+      return;
+    }
+    const d = new Date(trimmedDs + "T00:00:00");
+    if (isNaN(d.getTime())) {
+      showToast("Invalid date selected.", "error");
+      return;
+    }
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     if (isLocked || lockedMonths.includes(key)) {
       showToast("This month is locked. Please unlock it to modify entries.", "error");
@@ -686,13 +714,13 @@ export default function App() {
     }
 
     const newLogs = { ...logs };
-    const dayEntries = newLogs[ds] ? [...newLogs[ds]] : [];
+    const dayEntries = newLogs[trimmedDs] ? [...newLogs[trimmedDs]] : [];
     
     let unpaidHrs = 0;
     if(['TARDY', 'NO-SHOW'].includes(type)) {
       unpaidHrs = hrs;
       if(cover) {
-        const currentBal = getPtoBalanceOnDate(ds, newLogs, settings);
+        const currentBal = getPtoBalanceOnDate(trimmedDs, newLogs, settings);
         
         let ptoUsedToday = 0;
         dayEntries.forEach(e => {
@@ -723,7 +751,7 @@ export default function App() {
       const entry = { type: 'UNPTO', hrs };
       const { entries, warning } = processEntryWithBalances(
         entry,
-        ds,
+        trimmedDs,
         newLogs,
         dayEntries,
         settings,
@@ -740,7 +768,7 @@ export default function App() {
       dayEntries.push({ type, hrs });
     }
 
-    newLogs[ds] = dayEntries;
+    newLogs[trimmedDs] = dayEntries;
     updateLogs(newLogs);
   };
 
