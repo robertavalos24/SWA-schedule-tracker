@@ -29,6 +29,8 @@ const themeIcons: Record<ThemeType, string> = {
   forest: '🌲'
 };
 
+export const BUILD_ID = '2026-11-10 11:51 PST';
+
 const themes: ThemeType[] = ['light', 'dark', 'ocean', 'sunset', 'forest'];
 
 export const Header: React.FC<HeaderProps> = ({
@@ -112,7 +114,12 @@ export const Header: React.FC<HeaderProps> = ({
               LUV TRACKER
               <span className="hidden xs:inline text-[10px] sm:text-xs font-semibold not-italic px-1.5 py-0.5 rounded-full bg-white/15 border border-white/25">2.0</span>
             </span>
-            <span className="text-[10px] sm:text-[11px] text-white/70 font-medium tracking-wide hidden sm:block">SWA Attendance & Pay Portal</span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] sm:text-[11px] text-white/70 font-medium tracking-wide hidden sm:inline">SWA Attendance & Pay Portal</span>
+              <span className="text-[9px] sm:text-[10px] text-white/60 font-mono tracking-tight" data-testid="build-id">
+                Build {BUILD_ID}
+              </span>
+            </div>
           </div>
         </div>
 

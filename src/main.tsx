@@ -16,8 +16,44 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       }
     }).catch(() => {});
   } else {
-    registerSW({
+    let swRegistration: ServiceWorkerRegistration | undefined;
+    let isReloading = false;
+
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!isReloading) {
+        isReloading = true;
+        window.location.reload();
+      }
+    });
+
+    const updateSW = registerSW({
       immediate: true,
+      onNeedRefresh() {
+        updateSW(true);
+      },
+      onRegisteredSW(_swUrl, registration) {
+        swRegistration = registration;
+      },
+    });
+
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const reg = swRegistration || (await navigator.serviceWorker.getRegistration());
+          if (reg) {
+            await reg.update();
+            if (reg.waiting) {
+              await updateSW(true);
+              if (!isReloading) {
+                isReloading = true;
+                window.location.reload();
+              }
+            }
+          }
+        } catch {
+          // Ignore transient offline errors during SW update check
+        }
+      }
     });
   }
 }

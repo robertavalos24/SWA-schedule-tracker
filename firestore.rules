@@ -2,12 +2,30 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Each user can only read and write their own document and anything inside it
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Each user can only read and write their own document, and writes must have schemaVersion >= 3 and incremented rev
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll(['schemaVersion', 'rev'])
+        && request.resource.data.schemaVersion is number
+        && request.resource.data.schemaVersion >= 3
+        && request.resource.data.rev is number
+        && (
+          resource == null
+          || (!('rev' in resource.data) && request.resource.data.rev == 1)
+          || ('rev' in resource.data && !(resource.data.rev is number) && request.resource.data.rev == 1)
+          || ('rev' in resource.data && resource.data.rev is number && request.resource.data.rev == resource.data.rev + 1)
+        );
+      allow delete: if false;
 
       match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if false;
       }
     }
   }

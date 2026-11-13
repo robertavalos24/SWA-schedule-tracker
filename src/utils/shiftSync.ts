@@ -1,9 +1,14 @@
-import { LogEntry, LogsState, ShiftTombstone, TombstoneMap } from '../types';
+import { DeletedKeyMap, LogEntry, LogsState, ShiftTombstone, TombstoneMap } from '../types';
 
-// Keep confirmed tombstones for 180 days so offline/secondary devices also drop deleted shifts on Pull/merge.
+// Keep confirmed ID tombstones for 180 days so offline/secondary devices also drop deleted shifts on Pull/merge.
 // Unconfirmed tombstones (cloudConfirmed === false) are NEVER pruned until a fresh read of the cloud copy confirms the shift is gone.
 export const CONFIRMED_TOMBSTONE_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 export const MAX_CONFIRMED_TOMBSTONES = 400;
+
+// Content-key delete map retention: NEVER trim deletedShiftKeys below 2000 entries or 365 days.
+export const DELETED_SHIFT_KEYS_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+export const MIN_DELETED_SHIFT_KEYS_KEEP = 2000;
+export const HARD_MAX_DELETED_SHIFT_KEYS = 5000;
 
 export function generateShiftId(): string {
   return `sh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -16,6 +21,26 @@ export function isValidFirestoreFieldKey(key: string): boolean {
   if (trimmed.length === 0) return false;
   if (/^__.*__$/.test(key) || /^__.*__$/.test(trimmed)) return false;
   return true;
+}
+
+/**
+ * Canonical content key for a shift entry on a given date:
+ *   date|type|hrs|otRule|label|fmlaCase
+ */
+export function shiftContentKey(dateKey: string, entry: Partial<LogEntry>): string {
+  const cleanDate = String(dateKey || '').trim();
+  const cleanType = String(entry?.type || '').trim();
+  const parsedHrs =
+    typeof entry?.hrs === 'number' ? entry.hrs : parseFloat(String(entry?.hrs ?? ''));
+  const safeHrs = Number.isFinite(parsedHrs)
+    ? parsedHrs
+    : cleanType === 'PERSONAL-NOTE'
+      ? 0
+      : 8;
+  const cleanOtRule = String(entry?.otRule || 'std').trim();
+  const cleanLabel = String(entry?.label || '').trim();
+  const cleanFmla = String(entry?.fmlaCase || '').trim();
+  return `${cleanDate}|${cleanType}|${safeHrs}|${cleanOtRule}|${cleanLabel}|${cleanFmla}`;
 }
 
 export function getDeterministicShiftId(dateKey: string, entry: LogEntry, occurrenceIndex = 0): string {
@@ -33,18 +58,39 @@ export function getDeterministicShiftId(dateKey: string, entry: LogEntry, occurr
 }
 
 /**
+ * Checks whether any non-HOL-W shift in `rawLogs` is missing a persisted `id`.
+ * Used for the one-time legacy ID migration back to Firestore so later loads never mint new IDs.
+ */
+export function hasEntriesMissingIds(rawLogs: any): boolean {
+  if (!rawLogs || typeof rawLogs !== 'object' || Array.isArray(rawLogs)) {
+    return false;
+  }
+  for (const [rawDateKey, entries] of Object.entries(rawLogs)) {
+    const dateKey = rawDateKey.trim();
+    if (!isValidFirestoreFieldKey(dateKey) || !Array.isArray(entries)) continue;
+    for (const rawEntry of entries) {
+      if (!rawEntry || typeof rawEntry !== 'object') continue;
+      const type = typeof rawEntry.type === 'string' ? rawEntry.type.trim() : '';
+      if (!type || type === 'HOL-W') continue;
+      if (!rawEntry.id || typeof rawEntry.id !== 'string' || rawEntry.id.trim().length === 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Cleans logs and ensures every shift has a stable ID.
- * - Strips empty/invalid date keys and empty arrays.
- * - Preserves existing entry.id if present; otherwise assigns a deterministic ID (for legacy/cloud entries)
- *   or a fresh unique ID when `preferFreshIdsForMissing` is true.
+ * - NEVER replaces an existing non-empty `entry.id` under any circumstance.
+ * - Only assigns an ID when `entry.id` is missing/empty (`generateShiftId()` when `preferFreshIdsForMissing` is true,
+ *   or `getDeterministicShiftId` for legacy entries).
  */
 export function normalizeLogs(rawLogs: any, preferFreshIdsForMissing = false): LogsState {
   const cleaned: LogsState = {};
   if (!rawLogs || typeof rawLogs !== 'object' || Array.isArray(rawLogs)) {
     return cleaned;
   }
-
-  const seenIds = new Set<string>();
 
   for (const [rawDateKey, entries] of Object.entries(rawLogs)) {
     const dateKey = rawDateKey.trim();
@@ -79,20 +125,17 @@ export function normalizeLogs(rawLogs: any, preferFreshIdsForMissing = false): L
       const occIdx = sigCounts[baseSig] || 0;
       sigCounts[baseSig] = occIdx + 1;
 
-      if (!copy.id || typeof copy.id !== 'string' || copy.id.trim().length === 0) {
-        if (type === 'HOL-W') {
-          copy.id = getDeterministicShiftId(dateKey, copy, occIdx);
-        } else if (preferFreshIdsForMissing) {
-          copy.id = generateShiftId();
-        } else {
-          copy.id = getDeterministicShiftId(dateKey, copy, occIdx);
-        }
-      } else if (seenIds.has(copy.id) && type !== 'HOL-W') {
-        // If a shift was duplicated or split by balance calculation, give the second copy a distinct ID
-        copy.id = preferFreshIdsForMissing ? generateShiftId() : getDeterministicShiftId(dateKey, copy, occIdx);
+      // Keep IDs strictly stable: NEVER replace an existing ID
+      if (typeof copy.id === 'string' && copy.id.trim().length > 0) {
+        copy.id = copy.id.trim();
+      } else if (type === 'HOL-W') {
+        copy.id = getDeterministicShiftId(dateKey, copy, occIdx);
+      } else if (preferFreshIdsForMissing) {
+        copy.id = generateShiftId();
+      } else {
+        copy.id = getDeterministicShiftId(dateKey, copy, occIdx);
       }
 
-      seenIds.add(copy.id);
       validEntries.push(copy);
     }
 
@@ -104,24 +147,85 @@ export function normalizeLogs(rawLogs: any, preferFreshIdsForMissing = false): L
   return cleaned;
 }
 
+function buildCombinedDeleteSet(
+  localTombstones?: TombstoneMap | Record<string, any> | null,
+  cloudDeletedIds?: Record<string, any> | null,
+  localDeletedKeys?: DeletedKeyMap | Record<string, any> | null,
+  cloudDeletedKeys?: Record<string, any> | null
+): Set<string> {
+  const deletedSet = new Set<string>();
+
+  const addKeysFromMap = (mapObj?: Record<string, any> | null) => {
+    if (!mapObj || typeof mapObj !== 'object') return;
+    for (const [k, val] of Object.entries(mapObj)) {
+      if (isValidFirestoreFieldKey(k)) {
+        deletedSet.add(k.trim());
+      }
+      if (val && typeof val === 'object' && typeof val.contentKey === 'string' && isValidFirestoreFieldKey(val.contentKey)) {
+        deletedSet.add(val.contentKey.trim());
+      }
+    }
+  };
+
+  addKeysFromMap(localTombstones);
+  addKeysFromMap(cloudDeletedIds);
+  addKeysFromMap(localDeletedKeys);
+  addKeysFromMap(cloudDeletedKeys);
+
+  return deletedSet;
+}
+
 /**
- * Filters out any shifts whose ID (explicit `sh_...` or deterministic legacy `det_...` assigned to ID-less shifts)
- * is on the tombstone list. Deletes any date key that becomes empty after filtering.
+ * Returns true if `rawLogs` still contains ANY non-HOL-W shift whose `id`, deterministic legacy ID,
+ * OR `shiftContentKey(dateKey, entry)` appears in any of the delete lists.
  */
-export function filterLogsWithTombstones(
-  rawLogs: LogsState,
-  localTombstones: TombstoneMap,
-  cloudDeletedIds?: Record<string, number> | null
-): LogsState {
+export function logsContainDeletedShift(
+  rawLogs: any,
+  localTombstones?: TombstoneMap | Record<string, any> | null,
+  cloudDeletedIds?: Record<string, any> | null,
+  localDeletedKeys?: DeletedKeyMap | Record<string, any> | null,
+  cloudDeletedKeys?: Record<string, any> | null
+): boolean {
   const normalized = normalizeLogs(rawLogs, false);
-  const deletedSet = new Set<string>(Object.keys(localTombstones || {}));
-  if (cloudDeletedIds && typeof cloudDeletedIds === 'object') {
-    for (const id of Object.keys(cloudDeletedIds)) {
-      if (isValidFirestoreFieldKey(id)) {
-        deletedSet.add(id);
+  const deletedSet = buildCombinedDeleteSet(
+    localTombstones,
+    cloudDeletedIds,
+    localDeletedKeys,
+    cloudDeletedKeys
+  );
+  if (deletedSet.size === 0) return false;
+
+  for (const [dateKey, entries] of Object.entries(normalized)) {
+    for (const entry of entries) {
+      if (entry.type === 'HOL-W') continue;
+      const cKey = shiftContentKey(dateKey, entry);
+      if ((entry.id && deletedSet.has(entry.id)) || deletedSet.has(cKey)) {
+        return true;
       }
     }
   }
+  return false;
+}
+
+/**
+ * Filters out any non-HOL-W shifts whose `id`, deterministic legacy ID, OR `shiftContentKey(dateKey, entry)`
+ * is in EITHER delete list (`deletedShiftIds` or `deletedShiftKeys`, local or cloud).
+ * Deletes any date key that becomes empty after filtering.
+ */
+export function filterLogsWithTombstones(
+  rawLogs: LogsState,
+  localTombstones?: TombstoneMap | Record<string, any> | null,
+  cloudDeletedIds?: Record<string, any> | null,
+  localDeletedKeys?: DeletedKeyMap | Record<string, any> | null,
+  cloudDeletedKeys?: Record<string, any> | null
+): LogsState {
+  const normalized = normalizeLogs(rawLogs, false);
+  const deletedSet = buildCombinedDeleteSet(
+    localTombstones,
+    cloudDeletedIds,
+    localDeletedKeys,
+    cloudDeletedKeys
+  );
 
   if (deletedSet.size === 0) {
     return normalized;
@@ -132,7 +236,15 @@ export function filterLogsWithTombstones(
     const kept: LogEntry[] = [];
 
     for (const entry of entries) {
-      const isDeleted = Boolean(entry.id && entry.type !== 'HOL-W' && deletedSet.has(entry.id));
+      if (entry.type === 'HOL-W') {
+        kept.push(entry);
+        continue;
+      }
+      const cKey = shiftContentKey(dateKey, entry);
+      const isDeleted = Boolean(
+        (entry.id && deletedSet.has(entry.id)) ||
+        deletedSet.has(cKey)
+      );
       if (!isDeleted) {
         kept.push(entry);
       }
@@ -147,78 +259,212 @@ export function filterLogsWithTombstones(
 }
 
 /**
- * Compares prevLogs and nextLogs to record tombstones for every deleted shift.
- * Marks newly deleted shift IDs with `cloudConfirmed: false` until Firestore confirms the write.
+ * Compares prevLogs and nextLogs to record tombstones for every deleted shift by BOTH ID and content key.
  */
 export function recordDeletedShifts(
   prevLogs: LogsState,
   nextLogs: LogsState,
-  existingTombstones: TombstoneMap
-): { updatedTombstones: TombstoneMap; newlyDeletedIds: string[] } {
+  existingTombstones: TombstoneMap,
+  existingDeletedKeys: DeletedKeyMap = {}
+): {
+  updatedTombstones: TombstoneMap;
+  updatedDeletedKeys: DeletedKeyMap;
+  newlyDeletedIds: string[];
+  newlyDeletedKeys: string[];
+} {
   const now = Date.now();
   const updated: TombstoneMap = { ...(existingTombstones || {}) };
+  const updatedKeys: DeletedKeyMap = { ...(existingDeletedKeys || {}) };
   const newlyDeletedIds: string[] = [];
+  const newlyDeletedKeys: string[] = [];
 
   const nextNormalized = normalizeLogs(nextLogs, false);
   const survivingIds = new Set<string>();
-  for (const entries of Object.values(nextNormalized)) {
+  const survivingContentKeys = new Set<string>();
+  for (const [dateKey, entries] of Object.entries(nextNormalized)) {
     for (const entry of entries) {
+      if (entry.type === 'HOL-W') continue;
       if (entry.id) survivingIds.add(entry.id);
+      survivingContentKeys.add(shiftContentKey(dateKey, entry));
     }
   }
 
   const prevNormalized = normalizeLogs(prevLogs, false);
   for (const [dateKey, entries] of Object.entries(prevNormalized)) {
+    const sigCounts: Record<string, number> = {};
     for (const entry of entries) {
       if (entry.type === 'HOL-W') continue;
 
-      const primaryId = entry.id || getDeterministicShiftId(dateKey, entry, 0);
+      const baseSig = `${entry.type}|${entry.hrs}|${entry.otRule || 'std'}|${entry.label || ''}|${entry.fmlaCase || ''}`;
+      const occIdx = sigCounts[baseSig] || 0;
+      sigCounts[baseSig] = occIdx + 1;
 
-      if (!survivingIds.has(primaryId)) {
+      const primaryId = entry.id || getDeterministicShiftId(dateKey, entry, occIdx);
+      const cKey = shiftContentKey(dateKey, entry);
+
+      const idRemoved = !survivingIds.has(primaryId);
+      const contentRemoved = !survivingContentKeys.has(cKey);
+
+      if (idRemoved) {
         updated[primaryId] = {
           id: primaryId,
           date: dateKey,
+          contentKey: contentRemoved ? cKey : undefined,
           deletedAt: now,
           cloudConfirmed: false,
         };
         newlyDeletedIds.push(primaryId);
       }
+
+      if (contentRemoved && isValidFirestoreFieldKey(cKey)) {
+        updatedKeys[cKey] = now;
+        newlyDeletedKeys.push(cKey);
+      }
     }
   }
 
-  return { updatedTombstones: updated, newlyDeletedIds };
+  return {
+    updatedTombstones: updated,
+    updatedDeletedKeys: updatedKeys,
+    newlyDeletedIds,
+    newlyDeletedKeys,
+  };
 }
 
 /**
- * Removes restored shift IDs from tombstones (used during Undo or JSON Backup Restore).
+ * Collects all shift IDs, deterministic legacy IDs, and `shiftContentKey`s in `logs`
+ * (used as `restoredShiftIds` for Undo and JSON Backup Restore).
+ */
+export function collectShiftIdsAndKeys(logs: LogsState): string[] {
+  const out = new Set<string>();
+  const normalized = normalizeLogs(logs, false);
+  for (const [dateKey, entries] of Object.entries(normalized)) {
+    const sigCounts: Record<string, number> = {};
+    for (const entry of entries) {
+      if (entry.type === 'HOL-W') continue;
+      if (entry.id && isValidFirestoreFieldKey(entry.id)) {
+        out.add(entry.id);
+      }
+      const baseSig = `${entry.type}|${entry.hrs}|${entry.otRule || 'std'}|${entry.label || ''}|${entry.fmlaCase || ''}`;
+      const occIdx = sigCounts[baseSig] || 0;
+      sigCounts[baseSig] = occIdx + 1;
+      out.add(getDeterministicShiftId(dateKey, entry, occIdx));
+      out.add(shiftContentKey(dateKey, entry));
+    }
+  }
+  return Array.from(out);
+}
+
+/**
+ * Collects `shiftContentKey`s (and IDs) that exist in `nextLogs` and were newly added compared to `prevLogs`,
+ * so intentional re-adds (`executeSave`, imports, edits) remove their content key from both delete lists.
+ */
+export function collectNewlyAddedIdsAndKeys(prevLogs: LogsState, nextLogs: LogsState): string[] {
+  const prevKeys = new Set<string>();
+  const prevIds = new Set<string>();
+  const prevNorm = normalizeLogs(prevLogs, false);
+  for (const [dateKey, entries] of Object.entries(prevNorm)) {
+    for (const entry of entries) {
+      if (entry.type === 'HOL-W') continue;
+      if (entry.id) prevIds.add(entry.id);
+      prevKeys.add(shiftContentKey(dateKey, entry));
+    }
+  }
+
+  const added = new Set<string>();
+  const nextNorm = normalizeLogs(nextLogs, false);
+  for (const [dateKey, entries] of Object.entries(nextNorm)) {
+    const sigCounts: Record<string, number> = {};
+    for (const entry of entries) {
+      if (entry.type === 'HOL-W') continue;
+      const baseSig = `${entry.type}|${entry.hrs}|${entry.otRule || 'std'}|${entry.label || ''}|${entry.fmlaCase || ''}`;
+      const occIdx = sigCounts[baseSig] || 0;
+      sigCounts[baseSig] = occIdx + 1;
+
+      const cKey = shiftContentKey(dateKey, entry);
+      const isNewKey = !prevKeys.has(cKey);
+      const isNewId = Boolean(entry.id && !prevIds.has(entry.id));
+      if (isNewKey || isNewId) {
+        added.add(cKey);
+        if (entry.id) added.add(entry.id);
+        added.add(getDeterministicShiftId(dateKey, entry, occIdx));
+      }
+    }
+  }
+  return Array.from(added);
+}
+
+/**
+ * Removes restored/re-added IDs and content keys from BOTH local delete lists (`tombstones` and `deletedKeys`).
+ */
+export function removeItemsFromDeleteLists(
+  itemsToRemove: Iterable<string>,
+  existingTombstones: TombstoneMap,
+  existingDeletedKeys: DeletedKeyMap
+): { updatedTombstones: TombstoneMap; updatedDeletedKeys: DeletedKeyMap } {
+  const removeSet = new Set<string>();
+  for (const item of itemsToRemove) {
+    if (typeof item === 'string' && item.trim().length > 0) {
+      removeSet.add(item.trim());
+    }
+  }
+
+  if (removeSet.size === 0) {
+    return {
+      updatedTombstones: { ...(existingTombstones || {}) },
+      updatedDeletedKeys: { ...(existingDeletedKeys || {}) },
+    };
+  }
+
+  const updatedTombstones: TombstoneMap = {};
+  for (const [id, t] of Object.entries(existingTombstones || {})) {
+    if (removeSet.has(id)) continue;
+    if (t?.contentKey && removeSet.has(t.contentKey)) {
+      if (id.startsWith('det_')) continue;
+      updatedTombstones[id] = { ...t, contentKey: undefined };
+    } else {
+      updatedTombstones[id] = t;
+    }
+  }
+
+  const updatedDeletedKeys: DeletedKeyMap = {};
+  for (const [k, ts] of Object.entries(existingDeletedKeys || {})) {
+    if (!removeSet.has(k)) {
+      updatedDeletedKeys[k] = ts;
+    }
+  }
+
+  return { updatedTombstones, updatedDeletedKeys };
+}
+
+/**
+ * Backward-compatible helper for removing restored shift IDs from tombstones.
  */
 export function removeRestoredIdsFromTombstones(
   restoredLogs: LogsState,
   existingTombstones: TombstoneMap
 ): TombstoneMap {
-  const updated: TombstoneMap = { ...(existingTombstones || {}) };
-  const normalized = normalizeLogs(restoredLogs, false);
-  for (const [dateKey, entries] of Object.entries(normalized)) {
-    const sigCounts: Record<string, number> = {};
-    for (const entry of entries) {
-      if (entry.id) delete updated[entry.id];
-      const baseSig = `${entry.type}|${entry.hrs}|${entry.otRule || 'std'}|${entry.label || ''}|${entry.fmlaCase || ''}`;
-      const occIdx = sigCounts[baseSig] || 0;
-      sigCounts[baseSig] = occIdx + 1;
-      delete updated[getDeterministicShiftId(dateKey, entry, occIdx)];
-    }
-  }
-  return updated;
+  const restored = collectShiftIdsAndKeys(restoredLogs);
+  return removeItemsFromDeleteLists(restored, existingTombstones, {}).updatedTombstones;
 }
 
 /**
- * Merges cloud `deletedShiftIds` ({ [shiftId]: deletedAtMs }) into local tombstones.
+ * Merges cloud `deletedShiftIds` ({ [shiftId]: deletedAtMs }) into local tombstones,
+ * skipping any IDs/keys in `excludeIds` (e.g. `restoredShiftIds`).
  */
 export function mergeCloudTombstones(
   localTombstones: TombstoneMap,
-  cloudDeletedIds?: Record<string, any> | null
+  cloudDeletedIds?: Record<string, any> | null,
+  excludeIds?: Iterable<string>
 ): TombstoneMap {
-  const merged: TombstoneMap = { ...(localTombstones || {}) };
+  const excluded = new Set<string>(excludeIds || []);
+  const merged: TombstoneMap = {};
+  for (const [id, t] of Object.entries(localTombstones || {})) {
+    if (!excluded.has(id)) {
+      merged[id] = t;
+    }
+  }
+
   if (!cloudDeletedIds || typeof cloudDeletedIds !== 'object') {
     return merged;
   }
@@ -226,10 +472,12 @@ export function mergeCloudTombstones(
   const now = Date.now();
   for (const [id, rawTs] of Object.entries(cloudDeletedIds)) {
     if (!isValidFirestoreFieldKey(id)) continue;
+    const cleanId = id.trim();
+    if (excluded.has(cleanId)) continue;
     const deletedAt = typeof rawTs === 'number' && Number.isFinite(rawTs) ? rawTs : now;
-    if (!merged[id]) {
-      merged[id] = {
-        id,
+    if (!merged[cleanId]) {
+      merged[cleanId] = {
+        id: cleanId,
         date: '',
         deletedAt,
         cloudConfirmed: false,
@@ -240,7 +488,93 @@ export function mergeCloudTombstones(
 }
 
 /**
- * Marks tombstones as confirmed ONLY when a fresh read of the cloud copy shows the shift is gone
+ * Merges cloud `deletedShiftKeys` ({ [contentKey]: deletedAtMs }) into local `deletedShiftKeys`,
+ * skipping any keys in `excludeKeys` (e.g. `restoredShiftIds` or intentionally re-added shifts).
+ */
+export function mergeCloudDeletedKeys(
+  localDeletedKeys: DeletedKeyMap,
+  cloudDeletedKeys?: Record<string, any> | null,
+  excludeKeys?: Iterable<string>
+): DeletedKeyMap {
+  const excluded = new Set<string>(excludeKeys || []);
+  const merged: DeletedKeyMap = {};
+  const now = Date.now();
+
+  for (const [k, ts] of Object.entries(localDeletedKeys || {})) {
+    if (!isValidFirestoreFieldKey(k)) continue;
+    const cleanKey = k.trim();
+    if (excluded.has(cleanKey)) continue;
+    merged[cleanKey] = typeof ts === 'number' && Number.isFinite(ts) ? Math.trunc(ts) : now;
+  }
+
+  if (cloudDeletedKeys && typeof cloudDeletedKeys === 'object') {
+    for (const [k, rawTs] of Object.entries(cloudDeletedKeys)) {
+      if (!isValidFirestoreFieldKey(k)) continue;
+      const cleanKey = k.trim();
+      if (excluded.has(cleanKey)) continue;
+      const ts = typeof rawTs === 'number' && Number.isFinite(rawTs) ? Math.trunc(rawTs) : now;
+      merged[cleanKey] = merged[cleanKey] ? Math.max(merged[cleanKey], ts) : ts;
+    }
+  }
+
+  return pruneDeletedShiftKeys(merged, null, now);
+}
+
+/**
+ * Prunes `deletedShiftKeys` while strictly obeying:
+ *   NEVER trim `deletedShiftKeys` below 2000 entries OR 365 days!
+ * An entry is kept if it is within the newest 2000 entries OR if its age is <= 365 days
+ * (and if `freshCloudLogs` still contains that content key, its timestamp stays active),
+ * bounded only by `HARD_MAX_DELETED_SHIFT_KEYS` (5000) to protect Firestore's 1MB document limit.
+ */
+export function pruneDeletedShiftKeys(
+  keysMap: Record<string, any> | null | undefined,
+  freshCloudLogs?: LogsState | null,
+  now = Date.now()
+): DeletedKeyMap {
+  if (!keysMap || typeof keysMap !== 'object') return {};
+
+  const activeCloudContentKeys = new Set<string>();
+  if (freshCloudLogs && typeof freshCloudLogs === 'object') {
+    const norm = normalizeLogs(freshCloudLogs, false);
+    for (const [dateKey, entries] of Object.entries(norm)) {
+      for (const entry of entries) {
+        if (entry.type === 'HOL-W') continue;
+        activeCloudContentKeys.add(shiftContentKey(dateKey, entry));
+      }
+    }
+  }
+
+  const validPairs: [string, number][] = [];
+  for (const [rawKey, rawTs] of Object.entries(keysMap)) {
+    if (!isValidFirestoreFieldKey(rawKey)) continue;
+    const cleanKey = rawKey.trim();
+    const ts = typeof rawTs === 'number' && Number.isFinite(rawTs) ? Math.trunc(rawTs) : now;
+    validPairs.push([cleanKey, ts]);
+  }
+
+  validPairs.sort((a, b) => b[1] - a[1]);
+
+  const out: DeletedKeyMap = {};
+  let count = 0;
+  for (let i = 0; i < validPairs.length; i++) {
+    if (count >= HARD_MAX_DELETED_SHIFT_KEYS) break;
+    const [key, ts] = validPairs[i];
+    const age = now - ts;
+    const stillInCloud = activeCloudContentKeys.has(key);
+
+    // Never trim below 2000 entries OR 365 days
+    if (i < MIN_DELETED_SHIFT_KEYS_KEEP || age <= DELETED_SHIFT_KEYS_TTL_MS || stillInCloud) {
+      out[key] = ts;
+      count++;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Marks ID tombstones as confirmed ONLY when a fresh read of the cloud copy shows the shift is gone
  * (never based on the outgoing payload we just sent), and clears old entries ONLY after
  * `cloudConfirmed === true` and 180 days (`CONFIRMED_TOMBSTONE_TTL_MS`) have elapsed.
  */
@@ -351,6 +685,37 @@ export function buildCloudDeletedIdsMap(tombstones: TombstoneMap): Record<string
 }
 
 /**
+ * Exports `{ [contentKey]: deletedAt }` map (never trimmed below 2000 entries or 365 days)
+ * to store in Firestore `users/{uid}.deletedShiftKeys`.
+ */
+export function buildCloudDeletedKeysMap(
+  deletedKeys: DeletedKeyMap,
+  tombstones?: TombstoneMap
+): DeletedKeyMap {
+  const raw: DeletedKeyMap = {};
+  const now = Date.now();
+
+  if (tombstones && typeof tombstones === 'object') {
+    for (const t of Object.values(tombstones)) {
+      if (t?.contentKey && isValidFirestoreFieldKey(t.contentKey)) {
+        raw[t.contentKey.trim()] =
+          typeof t.deletedAt === 'number' && Number.isFinite(t.deletedAt) ? Math.trunc(t.deletedAt) : now;
+      }
+    }
+  }
+
+  for (const [k, ts] of Object.entries(deletedKeys || {})) {
+    if (isValidFirestoreFieldKey(k)) {
+      const cleanKey = k.trim();
+      const safeTs = typeof ts === 'number' && Number.isFinite(ts) ? Math.trunc(ts) : now;
+      raw[cleanKey] = raw[cleanKey] ? Math.max(raw[cleanKey], safeTs) : safeTs;
+    }
+  }
+
+  return pruneDeletedShiftKeys(raw, null, now);
+}
+
+/**
  * Recursively checks whether an object contains any empty "" or `__reserved__` keys.
  */
 export function hasInvalidFirestoreKeys(val: any): boolean {
@@ -389,7 +754,7 @@ export function sanitizeForFirestore(val: any): any {
   if (typeof val === 'object') {
     const cleanObj: Record<string, any> = {};
     for (const [k, v] of Object.entries(val)) {
-      if (k === '_origIdx') continue;
+      if (k === '_origIdx' || k === '_updateTime' || k === '_hadInvalidCloudKeys') continue;
       if (!isValidFirestoreFieldKey(k)) continue;
       const sv = sanitizeForFirestore(v);
       if (sv !== undefined) {

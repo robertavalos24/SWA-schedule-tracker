@@ -1,20 +1,42 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Settings, CardPrefs, FmlaCase, LogsState, MidCountsState, ThemeType, TombstoneMap } from '../types';
+import {
+  Settings,
+  CardPrefs,
+  FmlaCase,
+  LogsState,
+  MidCountsState,
+  ThemeType,
+  TombstoneMap,
+  DeletedKeyMap,
+} from '../types';
 import { autoAssignWorkedHolidays } from '../utils/calculations';
-import { useFirebaseSync, directRestPull, cleanLogsObject } from './useFirebaseSync';
+import {
+  useFirebaseSync,
+  directRestPull,
+  cleanLogsObject,
+  extractFriendlySyncError,
+} from './useFirebaseSync';
 import {
   normalizeLogs,
+  hasEntriesMissingIds,
   filterLogsWithTombstones,
+  logsContainDeletedShift,
   recordDeletedShifts,
-  removeRestoredIdsFromTombstones,
+  collectShiftIdsAndKeys,
+  collectNewlyAddedIdsAndKeys,
+  removeItemsFromDeleteLists,
   mergeCloudTombstones,
+  mergeCloudDeletedKeys,
   confirmAndPruneTombstones,
+  pruneDeletedShiftKeys,
   buildCloudDeletedIdsMap,
+  buildCloudDeletedKeysMap,
   hasInvalidFirestoreKeys,
   sanitizeForFirestore,
 } from '../utils/shiftSync';
 import { doc, onSnapshot, getDocFromServer } from 'firebase/firestore';
 import { auth } from '../firebase';
+import { useToast } from '../contexts/ToastContext';
 
 const themes: ThemeType[] = ['light', 'dark', 'ocean', 'sunset', 'forest'];
 
@@ -89,6 +111,11 @@ if (typeof window !== 'undefined') {
   }
 }
 
+export interface UpdateLogsOptions {
+  isRestore?: boolean;
+  reAddedKeys?: string[];
+}
+
 export const useScheduleData = () => {
   const {
     user,
@@ -107,6 +134,8 @@ export const useScheduleData = () => {
     handleFirestoreError,
     OperationType
   } = useFirebaseSync();
+
+  const { showToast } = useToast();
 
   const [logs, setLogs] = useState<LogsState>({});
   const [logsHistory, setLogsHistory] = useState<LogsState[]>([]);
@@ -130,6 +159,9 @@ export const useScheduleData = () => {
   const inFlightSyncCountRef = useRef<number>(0);
   const knownCloudDatesRef = useRef<Set<string>>(new Set());
   const tombstonesRef = useRef<TombstoneMap>({});
+  const deletedKeysRef = useRef<DeletedKeyMap>({});
+  const pendingRestoredIdsRef = useRef<Set<string>>(new Set());
+  const needsOneTimeLegacyIdSyncRef = useRef<boolean>(false);
 
   const latestStateRef = useRef({
     logs,
@@ -182,29 +214,91 @@ export const useScheduleData = () => {
     }
   }, [user]);
 
+  const hasCompletedLegacyIdMigration = useCallback((uid?: string | null): boolean => {
+    try {
+      const activeUid = uid ?? auth.currentUser?.uid ?? user?.uid;
+      if (!activeUid) return true;
+      return localStorage.getItem(getScopedKey('legacyIdsMigratedV3', activeUid)) === 'true';
+    } catch {
+      return false;
+    }
+  }, [user]);
+
+  const markLegacyIdMigrationComplete = useCallback((uid?: string | null) => {
+    try {
+      const activeUid = uid ?? auth.currentUser?.uid ?? user?.uid;
+      if (activeUid) {
+        localStorage.setItem(getScopedKey('legacyIdsMigratedV3', activeUid), 'true');
+      }
+      needsOneTimeLegacyIdSyncRef.current = false;
+    } catch {}
+  }, [user]);
+
   const runBackgroundSync = useCallback(
     async (
       payload: any,
       removedDates: string[],
       version: number,
-      showSavedOnSuccess = true
+      showSavedOnSuccess = true,
+      restoredShiftIds: string[] = [],
+      notifyShiftToast = false
     ): Promise<boolean> => {
       inFlightSyncCountRef.current += 1;
+      const effectiveRestored = Array.from(
+        new Set<string>([
+          ...restoredShiftIds,
+          ...Array.from(pendingRestoredIdsRef.current),
+        ])
+      );
+
       try {
-        const safeLogs = filterLogsWithTombstones(payload.logs || {}, tombstonesRef.current);
+        const safeLogs = filterLogsWithTombstones(
+          payload.logs || {},
+          tombstonesRef.current,
+          null,
+          deletedKeysRef.current,
+          null
+        );
         const enrichedPayload = {
           ...payload,
           logs: safeLogs,
           deletedShiftIds: buildCloudDeletedIdsMap(tombstonesRef.current),
+          deletedShiftKeys: buildCloudDeletedKeysMap(deletedKeysRef.current, tombstonesRef.current),
         };
 
-        const res = await syncToFirebase(enrichedPayload, true, removedDates);
+        const res = await syncToFirebase(
+          enrichedPayload,
+          true,
+          removedDates,
+          effectiveRestored,
+          notifyShiftToast
+        );
+
         if (res.ok) {
-          const mergedTombstones = mergeCloudTombstones(tombstonesRef.current, res.cloudDeletedIds);
-          // Only mark tombstones confirmed when a fresh read of the cloud copy (res.freshCloudLogs) shows the shift is gone
+          // Do NOT merge restoredShiftIds back in through mergeCloudTombstones / mergeCloudDeletedKeys
+          const mergedTombstones = mergeCloudTombstones(
+            tombstonesRef.current,
+            res.cloudDeletedIds,
+            effectiveRestored
+          );
           const prunedTombstones = confirmAndPruneTombstones(mergedTombstones, res.freshCloudLogs);
           tombstonesRef.current = prunedTombstones;
           saveToStorage('deletedShifts', prunedTombstones);
+
+          const mergedDeletedKeys = mergeCloudDeletedKeys(
+            deletedKeysRef.current,
+            res.cloudDeletedKeys,
+            effectiveRestored
+          );
+          const prunedDeletedKeys = pruneDeletedShiftKeys(mergedDeletedKeys, res.freshCloudLogs);
+          deletedKeysRef.current = prunedDeletedKeys;
+          saveToStorage('deletedShiftKeys', prunedDeletedKeys);
+
+          // Clear synced restored IDs now that Firestore removed them
+          for (const rk of effectiveRestored) {
+            pendingRestoredIdsRef.current.delete(rk);
+          }
+          saveToStorage('pendingRestoredIds', Array.from(pendingRestoredIdsRef.current));
 
           if (syncVersionRef.current === version) {
             knownCloudDatesRef.current = new Set(Object.keys(res.freshCloudLogs || safeLogs || {}));
@@ -213,24 +307,33 @@ export const useScheduleData = () => {
           if (showSavedOnSuccess) {
             triggerSavedIndicator();
           }
+          if (notifyShiftToast) {
+            showToast('Changes Saved', 'success');
+          }
           return true;
         }
         setShowSavedIndicator(false);
+        if (notifyShiftToast) {
+          showToast('Sync failed: Unable to save changes to cloud.', 'error');
+        }
         return false;
       } catch (err) {
         setShowSavedIndicator(false);
         console.warn('Background cloud sync failed (queued locally):', err);
+        if (notifyShiftToast) {
+          showToast(`Sync failed: ${extractFriendlySyncError(err)}`, 'error');
+        }
         return false;
       } finally {
         inFlightSyncCountRef.current = Math.max(0, inFlightSyncCountRef.current - 1);
       }
     },
-    [syncToFirebase, saveToStorage, triggerSavedIndicator]
+    [syncToFirebase, saveToStorage, triggerSavedIndicator, showToast]
   );
 
   // Load helper for a specific user ID or guest
   const loadScopedData = useCallback((uid: string | null) => {
-    // 0. Load Deleted Shift Tombstones FIRST so deleted shifts never reappear on refresh or year switch
+    // 0. Load Deleted Shift Tombstones (IDs & Content Keys) and Pending Restored IDs FIRST
     let loadedTombstones: TombstoneMap = {};
     try {
       const storedTombstones = localStorage.getItem(getScopedKey('deletedShifts', uid));
@@ -245,17 +348,54 @@ export const useScheduleData = () => {
     }
     tombstonesRef.current = loadedTombstones;
 
-    // 1. Logs (filtered against tombstones)
+    let loadedDeletedKeys: DeletedKeyMap = {};
+    try {
+      const storedDeletedKeys = localStorage.getItem(getScopedKey('deletedShiftKeys', uid));
+      if (storedDeletedKeys && storedDeletedKeys !== 'undefined' && storedDeletedKeys !== 'null') {
+        const parsed = JSON.parse(storedDeletedKeys);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          loadedDeletedKeys = pruneDeletedShiftKeys(parsed, null);
+        }
+      }
+    } catch {
+      loadedDeletedKeys = {};
+    }
+    deletedKeysRef.current = loadedDeletedKeys;
+
+    const loadedRestored = new Set<string>();
+    try {
+      const storedRestored = localStorage.getItem(getScopedKey('pendingRestoredIds', uid));
+      if (storedRestored && storedRestored !== 'undefined' && storedRestored !== 'null') {
+        const parsed = JSON.parse(storedRestored);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(item => {
+            if (typeof item === 'string' && item.trim()) loadedRestored.add(item.trim());
+          });
+        }
+      }
+    } catch {}
+    pendingRestoredIdsRef.current = loadedRestored;
+
+    // 1. Logs (filtered against BOTH ID tombstones and content-key tombstones)
     let loadedLogs: LogsState = {};
     try {
       const storedLogs = localStorage.getItem(getScopedKey('logs', uid));
       if (storedLogs && storedLogs !== 'undefined' && storedLogs !== 'null') {
         const parsedLogs = JSON.parse(storedLogs);
-        const filtered = filterLogsWithTombstones(parsedLogs, loadedTombstones);
+        if (uid && !hasCompletedLegacyIdMigration(uid) && hasEntriesMissingIds(parsedLogs)) {
+          needsOneTimeLegacyIdSyncRef.current = true;
+        }
+        const filtered = filterLogsWithTombstones(
+          parsedLogs,
+          loadedTombstones,
+          null,
+          loadedDeletedKeys,
+          null
+        );
         loadedLogs = normalizeLogs(autoAssignWorkedHolidays(filtered), false);
         setLogs(loadedLogs);
         Object.keys(loadedLogs).forEach(d => knownCloudDatesRef.current.add(d));
-        // Persist normalized IDs & tombstone filtering back to localStorage cleanly
+        // Persist stable IDs back to localStorage so later loads never mint new IDs
         localStorage.setItem(getScopedKey('logs', uid), JSON.stringify(loadedLogs));
       } else {
         setLogs({});
@@ -338,7 +478,7 @@ export const useScheduleData = () => {
       settings: loadedSettings,
       lockedMonths: loadedLocked
     };
-  }, []);
+  }, [hasCompletedLegacyIdMigration]);
 
   // Sync state lifecycle across authentication state changes
   const currentUserUid = user?.uid || null;
@@ -357,12 +497,13 @@ export const useScheduleData = () => {
       prevUserUid.current = currentUserUid;
       knownCloudDatesRef.current.clear();
       syncVersionRef.current = 0;
+      needsOneTimeLegacyIdSyncRef.current = false;
       if (currentUserUid) {
-        // Logged in: load user's scoped local data while Firestore attaches
         loadScopedData(currentUserUid);
       } else {
-        // Logged out: immediately wipe in-memory state back to clean blank template
         tombstonesRef.current = {};
+        deletedKeysRef.current = {};
+        pendingRestoredIdsRef.current.clear();
         setLogs({});
         setLogsHistory([]);
         setMidCounts({});
@@ -393,13 +534,24 @@ export const useScheduleData = () => {
     let unsubscribe: (() => void) | null = null;
 
     const unconfirmedCount = Object.values(tombstonesRef.current).filter(t => !t.cloudConfirmed).length;
+    const shouldPushOneTimeIds = needsOneTimeLegacyIdSyncRef.current && !hasCompletedLegacyIdMigration(user.uid);
 
-    // If user has unpushed local changes or unconfirmed tombstones (e.g., deleted a shift and reloaded immediately),
-    // push local changes & tombstones to Firestore first so local deletes always win!
-    if (hasPendingLocalSync(user.uid) || unconfirmedCount > 0) {
+    // Push pending local mutations, unconfirmed tombstones, or one-time migrated legacy IDs
+    if (hasPendingLocalSync(user.uid) || unconfirmedCount > 0 || shouldPushOneTimeIds) {
+      if (shouldPushOneTimeIds) {
+        markLegacyIdMigrationComplete(user.uid);
+      }
       const v = ++syncVersionRef.current;
       const filteredLocal = normalizeLogs(
-        autoAssignWorkedHolidays(filterLogsWithTombstones(latestStateRef.current.logs, tombstonesRef.current)),
+        autoAssignWorkedHolidays(
+          filterLogsWithTombstones(
+            latestStateRef.current.logs,
+            tombstonesRef.current,
+            null,
+            deletedKeysRef.current,
+            null
+          )
+        ),
         false
       );
       const removed = Array.from(knownCloudDatesRef.current).filter(d => !(d in filteredLocal));
@@ -410,12 +562,13 @@ export const useScheduleData = () => {
         },
         removed,
         v,
+        false,
+        Array.from(pendingRestoredIdsRef.current),
         false
       );
     }
 
     const handleDocSnapshot = (docSnap: any) => {
-      // Never overwrite local state with cached snapshots or local pending writes
       if (docSnap.metadata?.hasPendingWrites || docSnap.metadata?.fromCache) {
         return;
       }
@@ -426,11 +579,12 @@ export const useScheduleData = () => {
 
       const data = docSnap.data();
       const hasExistingLocalLogs = localStorage.getItem(getScopedKey('logs', user.uid)) !== null;
+      const activeRestored = pendingRestoredIdsRef.current;
 
-      // 1. Always merge deletedShiftIds from other devices and immediately remove any tombstoned shifts
-      // from the logs on screen, even when local logs already exist — without replacing other local data.
+      // 1. Always merge deletedShiftIds AND deletedShiftKeys from other devices and immediately remove
+      // any tombstoned shifts (by ID or content key) from the logs on screen without replacing other local data.
       if (data.deletedShiftIds && typeof data.deletedShiftIds === 'object') {
-        const merged = mergeCloudTombstones(tombstonesRef.current, data.deletedShiftIds);
+        const merged = mergeCloudTombstones(tombstonesRef.current, data.deletedShiftIds, activeRestored);
         tombstonesRef.current =
           data.logs && typeof data.logs === 'object'
             ? confirmAndPruneTombstones(merged, data.logs)
@@ -438,12 +592,29 @@ export const useScheduleData = () => {
         saveToStorage('deletedShifts', tombstonesRef.current);
       }
 
-      if (Object.keys(tombstonesRef.current).length > 0 || (data.deletedShiftIds && typeof data.deletedShiftIds === 'object')) {
+      if (data.deletedShiftKeys && typeof data.deletedShiftKeys === 'object') {
+        const mergedKeys = mergeCloudDeletedKeys(deletedKeysRef.current, data.deletedShiftKeys, activeRestored);
+        deletedKeysRef.current =
+          data.logs && typeof data.logs === 'object'
+            ? pruneDeletedShiftKeys(mergedKeys, data.logs)
+            : mergedKeys;
+        saveToStorage('deletedShiftKeys', deletedKeysRef.current);
+      }
+
+      const hasAnyDeletes =
+        Object.keys(tombstonesRef.current).length > 0 ||
+        Object.keys(deletedKeysRef.current).length > 0 ||
+        Boolean(data.deletedShiftIds && typeof data.deletedShiftIds === 'object') ||
+        Boolean(data.deletedShiftKeys && typeof data.deletedShiftKeys === 'object');
+
+      if (hasAnyDeletes) {
         const currentLocalLogs = latestStateRef.current.logs || {};
         const filteredLocal = filterLogsWithTombstones(
           currentLocalLogs,
           tombstonesRef.current,
-          data.deletedShiftIds
+          data.deletedShiftIds,
+          deletedKeysRef.current,
+          data.deletedShiftKeys
         );
 
         let beforeCount = 0;
@@ -475,20 +646,59 @@ export const useScheduleData = () => {
         return;
       }
 
-      // Only hydrate initial cloud state if local storage had not already been populated for this user
-
       if (data.logs !== undefined) {
+        const cloudMissingIds =
+          !hasCompletedLegacyIdMigration(user.uid) && hasEntriesMissingIds(data.logs);
+
         const filtered = normalizeLogs(
           autoAssignWorkedHolidays(
-            filterLogsWithTombstones(data.logs, tombstonesRef.current, data.deletedShiftIds)
+            filterLogsWithTombstones(
+              data.logs,
+              tombstonesRef.current,
+              data.deletedShiftIds,
+              deletedKeysRef.current,
+              data.deletedShiftKeys
+            )
           ),
           false
         );
         Object.keys(filtered).forEach(d => knownCloudDatesRef.current.add(d));
+
         if (!hasExistingLocalLogs) {
           setLogs(filtered);
           latestStateRef.current.logs = filtered;
           saveToStorage('logs', filtered);
+
+          // One time only, write any IDs created for old cloud shifts back to Firestore
+          if (cloudMissingIds) {
+            markLegacyIdMigrationComplete(user.uid);
+            const v = ++syncVersionRef.current;
+            runBackgroundSync(
+              {
+                ...latestStateRef.current,
+                logs: filtered,
+              },
+              [],
+              v,
+              false,
+              [],
+              false
+            );
+          }
+        } else if (cloudMissingIds) {
+          markLegacyIdMigrationComplete(user.uid);
+          const v = ++syncVersionRef.current;
+          runBackgroundSync(
+            {
+              ...latestStateRef.current,
+              logs: latestStateRef.current.logs,
+            },
+            [],
+            v,
+            false,
+            [],
+            false
+          );
         }
       }
 
@@ -565,7 +775,18 @@ export const useScheduleData = () => {
       isSubscribed = false;
       if (unsubscribe) unsubscribe();
     };
-  }, [user, db, saveToStorage, hasPendingLocalSync, runBackgroundSync, reportSyncError, handleFirestoreError, OperationType]);
+  }, [
+    user,
+    db,
+    saveToStorage,
+    hasPendingLocalSync,
+    hasCompletedLegacyIdMigration,
+    markLegacyIdMigrationComplete,
+    runBackgroundSync,
+    reportSyncError,
+    handleFirestoreError,
+    OperationType,
+  ]);
 
   // Automatically flush queued pending local deletes/mutations when browser comes back online
   useEffect(() => {
@@ -577,7 +798,15 @@ export const useScheduleData = () => {
       if (hasPendingLocalSync(activeUser.uid) || hasUnconfirmedTombstones) {
         const v = ++syncVersionRef.current;
         const filteredLocal = normalizeLogs(
-          autoAssignWorkedHolidays(filterLogsWithTombstones(latestStateRef.current.logs, tombstonesRef.current)),
+          autoAssignWorkedHolidays(
+            filterLogsWithTombstones(
+              latestStateRef.current.logs,
+              tombstonesRef.current,
+              null,
+              deletedKeysRef.current,
+              null
+            )
+          ),
           false
         );
         const removed = Array.from(knownCloudDatesRef.current).filter(d => !(d in filteredLocal));
@@ -588,6 +817,8 @@ export const useScheduleData = () => {
           },
           removed,
           v,
+          false,
+          Array.from(pendingRestoredIdsRef.current),
           false
         );
       }
@@ -611,26 +842,78 @@ export const useScheduleData = () => {
   }, [isLocked]);
 
   const updateLogs = useCallback(
-    (newLogs: LogsState, options?: { isRestore?: boolean }) => {
+    (newLogs: LogsState, options?: UpdateLogsOptions) => {
       isLocalMutationRef.current = Date.now();
       const version = ++syncVersionRef.current;
 
-      // Assign unique fresh IDs to any newly created shifts lacking an ID
+      // Assign unique fresh IDs to any newly created shifts lacking an ID (never replaces existing IDs)
       const normalizedWithFreshIds = normalizeLogs(newLogs, !options?.isRestore);
 
+      let restoredShiftIds: string[] = [];
+
       if (options?.isRestore) {
-        tombstonesRef.current = removeRestoredIdsFromTombstones(normalizedWithFreshIds, tombstonesRef.current);
+        // Restore mode: collect ALL restored IDs and content keys as restoredShiftIds
+        restoredShiftIds = collectShiftIdsAndKeys(normalizedWithFreshIds);
+        const cleanedDeletes = removeItemsFromDeleteLists(
+          restoredShiftIds,
+          tombstonesRef.current,
+          deletedKeysRef.current
+        );
+        tombstonesRef.current = cleanedDeletes.updatedTombstones;
+        deletedKeysRef.current = cleanedDeletes.updatedDeletedKeys;
+        restoredShiftIds.forEach(item => pendingRestoredIdsRef.current.add(item));
       } else {
-        const { updatedTombstones } = recordDeletedShifts(
+        // Intentional re-add / import: remove re-added shift content keys (and IDs) from BOTH delete lists
+        const newlyAdded = collectNewlyAddedIdsAndKeys(latestStateRef.current.logs, normalizedWithFreshIds);
+        const explicitReAdded = Array.isArray(options?.reAddedKeys) ? options!.reAddedKeys! : [];
+        const combinedReAdded = Array.from(new Set([...newlyAdded, ...explicitReAdded]));
+
+        let workingTombstones = tombstonesRef.current;
+        let workingDeletedKeys = deletedKeysRef.current;
+
+        if (combinedReAdded.length > 0) {
+          const cleaned = removeItemsFromDeleteLists(
+            combinedReAdded,
+            workingTombstones,
+            workingDeletedKeys
+          );
+          workingTombstones = cleaned.updatedTombstones;
+          workingDeletedKeys = cleaned.updatedDeletedKeys;
+          combinedReAdded.forEach(item => pendingRestoredIdsRef.current.add(item));
+          restoredShiftIds = combinedReAdded;
+        }
+
+        // Record any deleted shifts (both ID and shiftContentKey)
+        const {
+          updatedTombstones,
+          updatedDeletedKeys,
+          newlyDeletedIds,
+          newlyDeletedKeys,
+        } = recordDeletedShifts(
           latestStateRef.current.logs,
           normalizedWithFreshIds,
-          tombstonesRef.current
+          workingTombstones,
+          workingDeletedKeys
         );
         tombstonesRef.current = updatedTombstones;
-      }
-      saveToStorage('deletedShifts', tombstonesRef.current);
+        deletedKeysRef.current = updatedDeletedKeys;
 
-      const filteredLogs = filterLogsWithTombstones(normalizedWithFreshIds, tombstonesRef.current);
+        // Any newly deleted shift is no longer pending restore
+        newlyDeletedIds.forEach(id => pendingRestoredIdsRef.current.delete(id));
+        newlyDeletedKeys.forEach(k => pendingRestoredIdsRef.current.delete(k));
+      }
+
+      saveToStorage('deletedShifts', tombstonesRef.current);
+      saveToStorage('deletedShiftKeys', deletedKeysRef.current);
+      saveToStorage('pendingRestoredIds', Array.from(pendingRestoredIdsRef.current));
+
+      const filteredLogs = filterLogsWithTombstones(
+        normalizedWithFreshIds,
+        tombstonesRef.current,
+        null,
+        deletedKeysRef.current,
+        null
+      );
       const processedLogs = normalizeLogs(autoAssignWorkedHolidays(filteredLogs), false);
 
       const prevDates = new Set([
@@ -651,7 +934,7 @@ export const useScheduleData = () => {
       saveToStorage('logs', processedLogs);
 
       if (auth.currentUser || user) {
-        // Immediately sync local shift additions/deletions to Firestore; only show "Changes Saved" when sync succeeds
+        // Show 'Changes Saved' toast on success, or 'Sync failed' toast on failure
         runBackgroundSync(
           {
             ...latestStateRef.current,
@@ -659,13 +942,16 @@ export const useScheduleData = () => {
           },
           removedDates,
           version,
+          true,
+          restoredShiftIds,
           true
         );
       } else {
         triggerSavedIndicator();
+        showToast('Changes Saved', 'success');
       }
     },
-    [user, saveToStorage, triggerSavedIndicator, runBackgroundSync]
+    [user, saveToStorage, triggerSavedIndicator, runBackgroundSync, showToast]
   );
 
   const undoLogs = useCallback(() => {
@@ -674,18 +960,46 @@ export const useScheduleData = () => {
     const version = ++syncVersionRef.current;
     const rawPrevious = cleanLogsObject(logsHistory[logsHistory.length - 1]);
 
-    // Remove restored shift IDs from tombstones so Undo can bring back the last deleted shift intentionally
-    const afterRestoreTombstones = removeRestoredIdsFromTombstones(rawPrevious, tombstonesRef.current);
-    const { updatedTombstones } = recordDeletedShifts(
+    // Collect restored IDs and content keys as restoredShiftIds so Undo sticks locally and in Firestore
+    const restoredShiftIds = collectShiftIdsAndKeys(rawPrevious);
+    const cleanedAfterRestore = removeItemsFromDeleteLists(
+      restoredShiftIds,
+      tombstonesRef.current,
+      deletedKeysRef.current
+    );
+    restoredShiftIds.forEach(item => pendingRestoredIdsRef.current.add(item));
+
+    const {
+      updatedTombstones,
+      updatedDeletedKeys,
+      newlyDeletedIds,
+      newlyDeletedKeys,
+    } = recordDeletedShifts(
       latestStateRef.current.logs,
       rawPrevious,
-      afterRestoreTombstones
+      cleanedAfterRestore.updatedTombstones,
+      cleanedAfterRestore.updatedDeletedKeys
     );
+
+    newlyDeletedIds.forEach(id => pendingRestoredIdsRef.current.delete(id));
+    newlyDeletedKeys.forEach(k => pendingRestoredIdsRef.current.delete(k));
+
     tombstonesRef.current = updatedTombstones;
+    deletedKeysRef.current = updatedDeletedKeys;
     saveToStorage('deletedShifts', tombstonesRef.current);
+    saveToStorage('deletedShiftKeys', deletedKeysRef.current);
+    saveToStorage('pendingRestoredIds', Array.from(pendingRestoredIdsRef.current));
 
     const previous = normalizeLogs(
-      autoAssignWorkedHolidays(filterLogsWithTombstones(rawPrevious, tombstonesRef.current)),
+      autoAssignWorkedHolidays(
+        filterLogsWithTombstones(
+          rawPrevious,
+          tombstonesRef.current,
+          null,
+          deletedKeysRef.current,
+          null
+        )
+      ),
       false
     );
 
@@ -708,12 +1022,15 @@ export const useScheduleData = () => {
         },
         removedDates,
         version,
+        true,
+        restoredShiftIds,
         true
       );
     } else {
       triggerSavedIndicator();
+      showToast('Changes Saved', 'success');
     }
-  }, [logsHistory, user, saveToStorage, triggerSavedIndicator, runBackgroundSync]);
+  }, [logsHistory, user, saveToStorage, triggerSavedIndicator, runBackgroundSync, showToast]);
 
   const updateMidCounts = useCallback((newMids: MidCountsState) => {
     isLocalMutationRef.current = Date.now();
@@ -757,7 +1074,6 @@ export const useScheduleData = () => {
       latestStateRef.current.settings = updated;
       saveToStorage('settings', updated);
 
-      // When localOnly is true (e.g. automatic year-view calculation), do NOT trigger a cloud push
       if (localOnly) {
         return;
       }
@@ -820,13 +1136,24 @@ export const useScheduleData = () => {
     isLocalMutationRef.current = Date.now();
     const version = ++syncVersionRef.current;
 
-    const { updatedTombstones } = recordDeletedShifts(
+    const {
+      updatedTombstones,
+      updatedDeletedKeys,
+      newlyDeletedIds,
+      newlyDeletedKeys,
+    } = recordDeletedShifts(
       latestStateRef.current.logs,
       {},
-      tombstonesRef.current
+      tombstonesRef.current,
+      deletedKeysRef.current
     );
     tombstonesRef.current = updatedTombstones;
+    deletedKeysRef.current = updatedDeletedKeys;
+    newlyDeletedIds.forEach(id => pendingRestoredIdsRef.current.delete(id));
+    newlyDeletedKeys.forEach(k => pendingRestoredIdsRef.current.delete(k));
     saveToStorage('deletedShifts', tombstonesRef.current);
+    saveToStorage('deletedShiftKeys', deletedKeysRef.current);
+    saveToStorage('pendingRestoredIds', Array.from(pendingRestoredIdsRef.current));
 
     const removedDates = Array.from(new Set([
       ...Object.keys(latestStateRef.current.logs || {}),
@@ -851,13 +1178,17 @@ export const useScheduleData = () => {
         },
         removedDates,
         version,
+        true,
+        [],
         true
       );
     } else {
       triggerSavedIndicator();
+      showToast('Changes Saved', 'success');
     }
-  }, [user, saveToStorage, runBackgroundSync, triggerSavedIndicator]);
+  }, [user, saveToStorage, runBackgroundSync, triggerSavedIndicator, showToast]);
 
+  // Navigation strictly changes view state only — NEVER calls setLogs, pullFromCloud, or syncToFirebase
   const changeMonth = (n: number) => {
     setDirection(n);
     let m = viewMonth + n;
@@ -896,7 +1227,6 @@ export const useScheduleData = () => {
 
     setCloudSyncState('syncing');
 
-    // Wait briefly if a push is currently in-flight so Pull never reads pre-push state
     const waitStart = Date.now();
     while (inFlightSyncCountRef.current > 0 && Date.now() - waitStart < 3500) {
       await new Promise(r => setTimeout(r, 100));
@@ -906,7 +1236,6 @@ export const useScheduleData = () => {
     try {
       let data: any = null;
 
-      // 1. Direct REST pull against Firestore v1 API (cache: 'no-store', zero invalid query params)
       try {
         const restData = await directRestPull(activeUser);
         if (restData?.__notFound) {
@@ -918,11 +1247,9 @@ export const useScheduleData = () => {
         }
       } catch (restErr: any) {
         const msg = restErr instanceof Error ? restErr.message : String(restErr);
-        // Surface HTTP 4xx errors (400/401/403) immediately rather than hiding them behind cached reads
         if (msg.includes('HTTP 4')) {
           throw restErr;
         }
-        // Only fall back to getDocFromServer for transient network hiccups (never getDocFromCache!)
         const docSnap = await getDocFromServer(docRef);
         if (!docSnap || !docSnap.exists()) {
           reportSyncSuccess();
@@ -937,43 +1264,67 @@ export const useScheduleData = () => {
           hasInvalidFirestoreKeys(data.logs) ||
           hasInvalidFirestoreKeys(data.midCounts) ||
           hasInvalidFirestoreKeys(data.deletedShiftIds) ||
+          hasInvalidFirestoreKeys(data.deletedShiftKeys) ||
           hasInvalidFirestoreKeys(data.settings);
+
+        const cloudMissingLegacyIds =
+          !hasCompletedLegacyIdMigration(activeUser.uid) && hasEntriesMissingIds(data.logs);
+        if (cloudMissingLegacyIds) {
+          markLegacyIdMigrationComplete(activeUser.uid);
+        }
 
         const sanitizedCloudDeletedIds =
           data.deletedShiftIds && typeof data.deletedShiftIds === 'object'
             ? sanitizeForFirestore(data.deletedShiftIds)
             : {};
+        const sanitizedCloudDeletedKeys =
+          data.deletedShiftKeys && typeof data.deletedShiftKeys === 'object'
+            ? sanitizeForFirestore(data.deletedShiftKeys)
+            : {};
 
-        const rawCloudLogsNormalized = normalizeLogs(sanitizeForFirestore(data.logs) || {}, false);
+        const rawCloudLogsSanitized = sanitizeForFirestore(data.logs) || {};
+        const rawCloudLogsNormalized = normalizeLogs(rawCloudLogsSanitized, false);
 
-        // Merge cloud deletedShiftIds with local tombstones so a deleted shift NEVER comes back on Pull
-        const mergedTombstones = mergeCloudTombstones(tombstonesRef.current, sanitizedCloudDeletedIds);
+        const activeRestored = pendingRestoredIdsRef.current;
+        const mergedTombstones = mergeCloudTombstones(
+          tombstonesRef.current,
+          sanitizedCloudDeletedIds,
+          activeRestored
+        );
+        const mergedDeletedKeys = mergeCloudDeletedKeys(
+          deletedKeysRef.current,
+          sanitizedCloudDeletedKeys,
+          activeRestored
+        );
+
+        // Check whether the cloud copy still had ANY deleted shift (by ID OR by shiftContentKey)
+        const cloudHadStaleDeletedShifts = logsContainDeletedShift(
+          rawCloudLogsNormalized,
+          mergedTombstones,
+          sanitizedCloudDeletedIds,
+          mergedDeletedKeys,
+          sanitizedCloudDeletedKeys
+        );
 
         const filteredCloudLogs = filterLogsWithTombstones(
           rawCloudLogsNormalized,
           mergedTombstones,
-          sanitizedCloudDeletedIds
+          sanitizedCloudDeletedIds,
+          mergedDeletedKeys,
+          sanitizedCloudDeletedKeys
         );
         const finalCloudLogs = normalizeLogs(autoAssignWorkedHolidays(filteredCloudLogs), false);
 
-        // Detect if raw cloud logs still contained any tombstoned shifts (e.g. from another device or an unconfirmed delete)
-        let rawCount = 0;
-        let filteredCount = 0;
-        Object.values(rawCloudLogsNormalized).forEach(arr => {
-          rawCount += arr.filter(e => e.type !== 'HOL-W').length;
-        });
-        Object.values(filteredCloudLogs).forEach(arr => {
-          filteredCount += arr.filter(e => e.type !== 'HOL-W').length;
-        });
-        const cloudHadStaleDeletedShifts = rawCount > filteredCount;
-
-        // Confirm tombstones strictly against the fresh read of the cloud copy (rawCloudLogsNormalized)
+        // Confirm tombstones strictly against the fresh read of the cloud copy
         tombstonesRef.current = confirmAndPruneTombstones(mergedTombstones, rawCloudLogsNormalized);
+        deletedKeysRef.current = pruneDeletedShiftKeys(mergedDeletedKeys, rawCloudLogsNormalized);
         saveToStorage('deletedShifts', tombstonesRef.current);
+        saveToStorage('deletedShiftKeys', deletedKeysRef.current);
 
         knownCloudDatesRef.current = new Set(Object.keys(finalCloudLogs));
 
-        const needsCloudCleanupPush = cloudHadStaleDeletedShifts || cloudHadInvalidKeys;
+        const needsCloudCleanupPush =
+          cloudHadStaleDeletedShifts || cloudHadInvalidKeys || cloudMissingLegacyIds;
 
         setLogs(finalCloudLogs);
         latestStateRef.current.logs = finalCloudLogs;
@@ -1015,7 +1366,8 @@ export const useScheduleData = () => {
 
         reportSyncSuccess();
 
-        // If cloud copy had tombstoned shifts or invalid "" / __reserved__ keys, push the cleaned copy back
+        // Never resurrect on Pull: if cloud copy still had any deleted shift (by ID or content key),
+        // invalid keys, or un-migrated legacy shift IDs, push the cleaned copy back right away.
         if (needsCloudCleanupPush) {
           const v = ++syncVersionRef.current;
           const removedDates = Object.keys(rawCloudLogsNormalized).filter(d => !(d in finalCloudLogs));
@@ -1026,6 +1378,8 @@ export const useScheduleData = () => {
             },
             removedDates,
             v,
+            false,
+            Array.from(pendingRestoredIdsRef.current),
             false
           );
         }
@@ -1040,7 +1394,17 @@ export const useScheduleData = () => {
       reportSyncError(e);
       throw e;
     }
-  }, [user, db, saveToStorage, setCloudSyncState, reportSyncSuccess, reportSyncError, runBackgroundSync]);
+  }, [
+    user,
+    db,
+    saveToStorage,
+    setCloudSyncState,
+    reportSyncSuccess,
+    reportSyncError,
+    runBackgroundSync,
+    hasCompletedLegacyIdMigration,
+    markLegacyIdMigrationComplete,
+  ]);
 
   const forceSyncToCloud = useCallback(async () => {
     const activeUser = auth.currentUser || user;
@@ -1048,14 +1412,23 @@ export const useScheduleData = () => {
     isLocalMutationRef.current = Date.now();
     const version = ++syncVersionRef.current;
     inFlightSyncCountRef.current += 1;
+    const effectiveRestored = Array.from(pendingRestoredIdsRef.current);
+
     try {
-      const filteredLocal = filterLogsWithTombstones(latestStateRef.current.logs, tombstonesRef.current);
+      const filteredLocal = filterLogsWithTombstones(
+        latestStateRef.current.logs,
+        tombstonesRef.current,
+        null,
+        deletedKeysRef.current,
+        null
+      );
       const cleanedLogs = normalizeLogs(autoAssignWorkedHolidays(filteredLocal), false);
       const removedDates = Array.from(knownCloudDatesRef.current).filter(d => !(d in cleanedLogs));
 
       const fullData = {
         logs: cleanedLogs,
         deletedShiftIds: buildCloudDeletedIdsMap(tombstonesRef.current),
+        deletedShiftKeys: buildCloudDeletedKeysMap(deletedKeysRef.current, tombstonesRef.current),
         midCounts: latestStateRef.current.midCounts || {},
         fmlaCases: latestStateRef.current.fmlaCases || [],
         cardPrefs: latestStateRef.current.cardPrefs || defaultCardPrefs,
@@ -1067,14 +1440,30 @@ export const useScheduleData = () => {
       latestStateRef.current.logs = cleanedLogs;
       saveToStorage('logs', cleanedLogs);
 
-      // Authoritative overwrite: mirrors local data in Firestore, deleting any removed shifts or days
-      const res = await syncToFirebase(fullData, true, removedDates);
+      const res = await syncToFirebase(fullData, true, removedDates, effectiveRestored, false);
       if (res.ok) {
-        const mergedTombstones = mergeCloudTombstones(tombstonesRef.current, res.cloudDeletedIds);
-        // Only mark tombstones confirmed when a fresh read of the cloud copy (res.freshCloudLogs) shows the shift is gone
+        const mergedTombstones = mergeCloudTombstones(
+          tombstonesRef.current,
+          res.cloudDeletedIds,
+          effectiveRestored
+        );
         const prunedTombstones = confirmAndPruneTombstones(mergedTombstones, res.freshCloudLogs);
         tombstonesRef.current = prunedTombstones;
         saveToStorage('deletedShifts', prunedTombstones);
+
+        const mergedDeletedKeys = mergeCloudDeletedKeys(
+          deletedKeysRef.current,
+          res.cloudDeletedKeys,
+          effectiveRestored
+        );
+        const prunedDeletedKeys = pruneDeletedShiftKeys(mergedDeletedKeys, res.freshCloudLogs);
+        deletedKeysRef.current = prunedDeletedKeys;
+        saveToStorage('deletedShiftKeys', prunedDeletedKeys);
+
+        for (const rk of effectiveRestored) {
+          pendingRestoredIdsRef.current.delete(rk);
+        }
+        saveToStorage('pendingRestoredIds', Array.from(pendingRestoredIdsRef.current));
 
         knownCloudDatesRef.current = new Set(Object.keys(res.freshCloudLogs || cleanedLogs));
         if (syncVersionRef.current === version) {
@@ -1094,10 +1483,11 @@ export const useScheduleData = () => {
     }
   }, [user, syncToFirebase, saveToStorage, triggerSavedIndicator]);
 
-  // Clean logout wrapper: immediately purges all sensitive in-memory state
   const logout = useCallback(async () => {
     knownCloudDatesRef.current.clear();
     tombstonesRef.current = {};
+    deletedKeysRef.current = {};
+    pendingRestoredIdsRef.current.clear();
     setLogs({});
     setLogsHistory([]);
     setMidCounts({});

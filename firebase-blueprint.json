@@ -32,6 +32,18 @@
         "deletedShiftIds": {
           "type": "object",
           "description": "Tombstone map of deleted shift IDs to deletion timestamps."
+        },
+        "deletedShiftKeys": {
+          "type": "object",
+          "description": "Tombstone map of deleted shift content keys (date|type|hrs|otRule|label|fmlaCase) to deletion timestamps."
+        },
+        "schemaVersion": {
+          "type": "number",
+          "description": "Minimum required client schema version (>= 3) to block stale cached app versions."
+        },
+        "rev": {
+          "type": "number",
+          "description": "Monotonically increasing document revision number incremented by 1 on each write."
         }
       }
     }

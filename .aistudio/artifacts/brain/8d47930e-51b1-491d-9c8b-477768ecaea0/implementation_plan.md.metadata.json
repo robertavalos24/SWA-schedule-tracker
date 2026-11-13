@@ -1,6 +1,0 @@
-{
-  "summary":  "Implementation plan for authoritative Firestore cloud synchronization and instant shift deletion sync. Outlines the root cause of resurrecting deleted shifts due to Firestore recursive map merging, and provides the architectural solution: atomic logs field replacement via mergeFields and true document overwrite on manual Push.",
-  "updatedAt":  "2026-10-05T03:59:32.540138068Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

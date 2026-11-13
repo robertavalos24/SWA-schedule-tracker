@@ -12,13 +12,14 @@ import { Controls } from './components/Controls';
 import { Calendar } from './components/Calendar';
 import { Modals } from './components/Modals';
 import { useScheduleData } from './hooks/useScheduleData';
-import { calculate, getRawSalary, getEffectiveSalaryAndLevel, getPtoBalanceOnDate, processEntryWithBalances, getRollingYearStats, formatPto } from './utils/calculations';
+import { calculate, getEffectiveSalaryAndLevel, getPtoBalanceOnDate, processEntryWithBalances, getRollingYearStats, formatPto } from './utils/calculations';
 import { 
   exportCSV, exportBackup, formatStandardDate, parseCSVLine, 
   saveToHandle, exportICS 
 } from './utils/importExport';
 import { saveHandleToIndexedDB, getHandleFromIndexedDB } from './utils/indexedDB';
 import { FmlaCase, Settings } from './types';
+import { shiftContentKey, collectNewlyAddedIdsAndKeys } from './utils/shiftSync';
 import { useToast } from './contexts/ToastContext';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
@@ -124,7 +125,7 @@ export default function App() {
         return;
       }
       lastSyncErrorToastRef.current = { msg, ts: now };
-      showToast(`Cloud sync failed: ${msg}`, 'error');
+      showToast(`Sync failed: ${msg}`, 'error');
     };
     window.addEventListener('firestore-offline', handleOffline);
     window.addEventListener('cloud-sync-error', handleCloudSyncError);
@@ -150,36 +151,9 @@ export default function App() {
 
   useEffect(() => {
     if (viewYear !== lastViewedYearRef.current) {
-      const newYear = viewYear;
-      const targetDs = `${newYear}-01-01`;
-      const { salary: newSal, level: newLvl } = getEffectiveSalaryAndLevel(targetDs, settings);
-      
-      const newSalStr = "$" + newSal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-      const newLvlStr = newLvl;
-      const newBaseYearStr = newYear.toString();
-
-      const newSettings: Partial<Settings> = {};
-      let changed = false;
-
-      if (settings.salary !== newSalStr) {
-        newSettings.salary = newSalStr;
-        changed = true;
-      }
-      if (settings.empLevel !== newLvlStr) {
-        newSettings.empLevel = newLvlStr;
-        changed = true;
-      }
-      if (settings.baseYear !== newBaseYearStr) {
-        newSettings.baseYear = newBaseYearStr;
-        changed = true;
-      }
-
-      if (changed) {
-        updateSettings(newSettings, { localOnly: true });
-      }
-      lastViewedYearRef.current = newYear;
+      lastViewedYearRef.current = viewYear;
     }
-  }, [viewYear, settings, updateSettings]);
+  }, [viewYear]);
 
   useEffect(() => {
     // Try to load handle from IndexedDB on mount
@@ -489,8 +463,9 @@ export default function App() {
       fmlaCases
     );
 
+    const reAddedKeys = entries.map(e => shiftContentKey(trimmedDate, e));
     newLogs[trimmedDate] = [...dayEntries, ...entries];
-    updateLogs(newLogs);
+    updateLogs(newLogs, { reAddedKeys });
     closeModal('addBlock');
     
     if (warning) {
@@ -553,9 +528,9 @@ export default function App() {
       fmlaCases
     );
 
+    const reAddedKeys = entries.map(e => shiftContentKey(dStr, e));
     newLogs[dStr] = [...dayEntries, ...entries];
-    updateLogs(newLogs);
-    showToast(`Logged ${type.replace('WORK-', '')} (${h}h) on ${dStr}`, 'success');
+    updateLogs(newLogs, { reAddedKeys });
     
     if (warning) {
       setPtoWarningMessage(warning);
@@ -588,9 +563,12 @@ export default function App() {
 
       const newLogs = { ...logs };
       const dayEntries = [...newLogs[editDate]];
+      const existingId = dayEntries[editIndex]?.id;
+      const entryWithStableId = existingId && !entry.id ? { ...entry, id: existingId } : { ...entry };
+      let reAddedKeys: string[] = [];
       
       const isWorkShift = (t: string) => t === 'WORK' || t.startsWith('WORK-');
-      if (isWorkShift(entry.type)) {
+      if (isWorkShift(entryWithStableId.type)) {
         const hasOffDay = dayEntries.some((e, idx) => {
           if (idx === editIndex) return false;
           const t = e.type;
@@ -598,16 +576,16 @@ export default function App() {
                  t === 'FMLA-P' || t === 'FML-UNP' || t === 'MED-P-PTO' || 
                  t === 'MED-UNP' || t === 'MED-LV';
         });
-        const isAlreadyAdded = dayEntries.some((e, idx) => idx !== editIndex && e.type === entry.type && e.hrs === entry.hrs && (e.label || '') === (entry.label || ''));
+        const isAlreadyAdded = dayEntries.some((e, idx) => idx !== editIndex && e.type === entryWithStableId.type && e.hrs === entryWithStableId.hrs && (e.label || '') === (entryWithStableId.label || ''));
         if (!hasOffDay && isAlreadyAdded) {
           showToast(`You can only work the same shift hours once in a single day (unless you have PTO/WOP/HOL).`, 'error');
           return;
         }
       }
 
-      if (entry.type === 'PTO' || entry.type === 'FMLA-P' || entry.type === 'UNPTO' || entry.type === 'FML-UNP' || entry.type === 'MED-P' || entry.type === 'MED-P-PTO' || entry.type === 'MED-UNP') {
+      if (entryWithStableId.type === 'PTO' || entryWithStableId.type === 'FMLA-P' || entryWithStableId.type === 'UNPTO' || entryWithStableId.type === 'FML-UNP' || entryWithStableId.type === 'MED-P' || entryWithStableId.type === 'MED-P-PTO' || entryWithStableId.type === 'MED-UNP') {
         const { entries, warning } = processEntryWithBalances(
-          { ...entry },
+          { ...entryWithStableId },
           editDate,
           newLogs,
           dayEntries,
@@ -615,16 +593,19 @@ export default function App() {
           fmlaCases,
           editIndex
         );
-        
+        if (existingId && entries.length > 0 && !entries[0].id) {
+          entries[0] = { ...entries[0], id: existingId };
+        }
+        reAddedKeys = entries.map(e => shiftContentKey(editDate, e));
         dayEntries.splice(editIndex, 1, ...entries);
         
         if (warning) {
           setPtoWarningMessage(warning);
           openModal('ptoWarning');
         }
-      } else if (['TARDY', 'NO-SHOW'].includes(entry.type)) {
-        let unpaidHrs = entry.hrs;
-        if (entry.coverWithPto) {
+      } else if (['TARDY', 'NO-SHOW'].includes(entryWithStableId.type)) {
+        let unpaidHrs = entryWithStableId.hrs;
+        if (entryWithStableId.coverWithPto) {
           const currentBal = getPtoBalanceOnDate(editDate, newLogs, settings);
           
           let ptoUsedToday = 0;
@@ -640,7 +621,7 @@ export default function App() {
           });
           
           const availablePto = currentBal - ptoUsedToday;
-          const requestedHrs = parseFloat(entry.hrs as any) || 8;
+          const requestedHrs = parseFloat(entryWithStableId.hrs as any) || 8;
           
           if (availablePto >= requestedHrs) {
             unpaidHrs = 0;
@@ -654,13 +635,16 @@ export default function App() {
             openModal('ptoWarning');
           }
         }
-        dayEntries[editIndex] = { ...entry, unpaidHrs };
+        const updated = { ...entryWithStableId, unpaidHrs };
+        dayEntries[editIndex] = updated;
+        reAddedKeys = [shiftContentKey(editDate, updated)];
       } else {
-        dayEntries[editIndex] = { ...entry };
+        dayEntries[editIndex] = { ...entryWithStableId };
+        reAddedKeys = [shiftContentKey(editDate, entryWithStableId)];
       }
       
       newLogs[editDate] = dayEntries;
-      updateLogs(newLogs);
+      updateLogs(newLogs, { reAddedKeys });
     }
   };
 
@@ -1419,7 +1403,8 @@ export default function App() {
 
     let finalMessage = "";
     if (totalNewEntries > 0) {
-      updateLogs(newLogs);
+      const reAddedKeys = collectNewlyAddedIdsAndKeys(logs, newLogs);
+      updateLogs(newLogs, { reAddedKeys });
       if (lastFoundMonth !== null && lastFoundYear !== null) { 
         setViewMonth(lastFoundMonth); 
         setViewYear(lastFoundYear); 
@@ -1535,7 +1520,7 @@ export default function App() {
   };
 
   const hourlyRate = () => {
-    const base = getRawSalary(settings.salary);
+    const { salary: base } = getEffectiveSalaryAndLevel(`${viewYear}-01-01`, settings);
     const ds = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-01`;
     const { salary } = getEffectiveSalaryAndLevel(ds, settings);
     const hrlyBase = base / 2080; 
@@ -2024,7 +2009,8 @@ export default function App() {
         onClose={() => closeModal('bidLineImport')}
         logs={logs}
         onImportLogs={(newLogs, targetMonth, targetYear, msg) => {
-          updateLogs(newLogs);
+          const reAddedKeys = collectNewlyAddedIdsAndKeys(logs, newLogs);
+          updateLogs(newLogs, { reAddedKeys });
           setViewMonth(targetMonth);
           setViewYear(targetYear);
           showToast(msg, 'success');

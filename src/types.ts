@@ -5,12 +5,14 @@ export type CloudSyncState = 'idle' | 'syncing' | 'synced' | 'error';
 export interface ShiftTombstone {
   id: string;
   date: string;
+  contentKey?: string;
   deletedAt: number;
   cloudConfirmed: boolean;
   confirmedAt?: number;
 }
 
 export type TombstoneMap = Record<string, ShiftTombstone>;
+export type DeletedKeyMap = Record<string, number>;
 
 export interface LogEntry {
   id?: string;
