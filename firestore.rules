@@ -6,27 +6,32 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isNum(val) {
+      return val is int || val is float || val is number;
+    }
+
+    function existingRev() {
+      return (resource != null && isNum(resource.data.get('rev', 0)) && resource.data.get('rev', 0) >= 0)
+        ? resource.data.get('rev', 0)
+        : 0;
+    }
+
     // Each user can only read and write their own document, and writes must have schemaVersion >= 3 and incremented rev
     match /users/{userId} {
-      allow read: if request.auth != null && request.auth.uid == userId;
-      allow create, update: if request.auth != null
-        && request.auth.uid == userId
-        && request.resource.data.keys().hasAll(['schemaVersion', 'rev'])
-        && request.resource.data.schemaVersion is number
-        && request.resource.data.schemaVersion >= 3
-        && request.resource.data.rev is number
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && isNum(request.resource.data.get('schemaVersion', null))
+        && request.resource.data.get('schemaVersion', 0) >= 3
+        && isNum(request.resource.data.get('rev', null))
         && (
           resource == null
-          || (!('rev' in resource.data) && request.resource.data.rev == 1)
-          || ('rev' in resource.data && !(resource.data.rev is number) && request.resource.data.rev == 1)
-          || ('rev' in resource.data && resource.data.rev is number && request.resource.data.rev == resource.data.rev + 1)
+          || request.resource.data.get('rev', 0) == existingRev() + 1
         );
       allow delete: if false;
-
-      match /{document=**} {
-        allow read: if request.auth != null && request.auth.uid == userId;
-        allow write: if false;
-      }
     }
   }
 }

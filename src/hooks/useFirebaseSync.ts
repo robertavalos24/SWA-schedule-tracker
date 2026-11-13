@@ -169,7 +169,8 @@ export async function directRestSync(
   user: User,
   data: any,
   isAuthoritative = true,
-  precondition?: FirestorePrecondition
+  precondition?: FirestorePrecondition,
+  options?: { suppress403ConsoleLog?: boolean }
 ): Promise<{ updateTime: string | null }> {
   const sanitizedPayload = sanitizeForFirestore(data) || {};
   if ('logs' in sanitizedPayload) {
@@ -228,7 +229,7 @@ export async function directRestSync(
   };
 
   let resp = await executePatch(false);
-  if (resp.status === 401) {
+  if (resp.status === 401 || resp.status === 403) {
     resp = await executePatch(true);
   }
 
@@ -249,7 +250,7 @@ export async function directRestSync(
 
   if (resp.status === 400) {
     console.error(`[Firestore REST Push HTTP 400] Full server error.message: ${serverMsg}`, errData || rawBody);
-  } else if (resp.status === 403) {
+  } else if (resp.status === 403 && !options?.suppress403ConsoleLog) {
     console.error(`[Firestore Security Rules Rejection HTTP 403] ${serverMsg}`, errData || rawBody);
   }
 
@@ -423,6 +424,20 @@ function isPreconditionConflictError(err: any): boolean {
   return false;
 }
 
+// Module-level serialization queue so concurrent syncToFirebase calls in the same browser tab
+// (e.g., React StrictMode double-invoking effects or rapid consecutive edits) never overlap
+// their pre-push read -> rev increment -> REST PATCH cycle.
+let cloudWriteChain: Promise<unknown> = Promise.resolve();
+
+export function enqueueCloudWrite<T>(task: () => Promise<T>): Promise<T> {
+  const next = cloudWriteChain.then(task, task);
+  cloudWriteChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
 export const useFirebaseSync = () => {
   const [user, setUser] = useState<User | null>(null);
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
@@ -478,6 +493,7 @@ export const useFirebaseSync = () => {
         lastAuthUidRef.current = res.user.uid;
         setUser(res.user);
         setGoogleAccessToken(res.accessToken);
+        setIsInitializingAuth(false);
         // Stay 'idle' on sign-in until the first real cloud Pull or Push succeeds
         setCloudSyncState('idle');
         setCloudSyncError(null);
@@ -490,10 +506,11 @@ export const useFirebaseSync = () => {
 
   const logout = async () => {
     lastAuthUidRef.current = null;
-    await signOut(auth);
+    setUser(null);
     setGoogleAccessToken(null);
     setCloudSyncState('idle');
     setCloudSyncError(null);
+    await signOut(auth);
   };
 
   const syncToFirebase = useCallback(
@@ -508,7 +525,17 @@ export const useFirebaseSync = () => {
       if (!activeUser) {
         throw new Error('Please sign in with Google to push to cloud.');
       }
-      const pathForWrite = `users/${activeUser.uid}`;
+      const targetUid = activeUser.uid;
+      if (auth.currentUser && auth.currentUser.uid !== targetUid) {
+        return {
+          ok: false,
+          freshCloudLogs: null,
+          cloudDeletedIds: {},
+          cloudDeletedKeys: {},
+          rev: 0,
+        };
+      }
+      const pathForWrite = `users/${targetUid}`;
       setCloudSyncState('syncing');
 
       const sanitizedData = sanitizeForFirestore(data) || {};
@@ -527,162 +554,298 @@ export const useFirebaseSync = () => {
           .filter(Boolean)
       );
 
-      const maxRetries = 3;
-      let committedDeletedIds: Record<string, number> = {};
-      let committedDeletedKeys: DeletedKeyMap = {};
-      let committedRev = 1;
+      const isStillSignedInAsTarget = () =>
+        auth.currentUser !== null &&
+        auth.currentUser.uid === targetUid &&
+        lastAuthUidRef.current === targetUid;
 
-      try {
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
-          // 1. Mandatory pre-push read: NEVER write unless the current cloud copy was read successfully
-          const pulled = await withRejectTimeout(
-            directRestPull(activeUser),
-            8000,
-            'Cloud pre-push read timed out. Changes stay saved locally and will retry.'
-          );
-
-          if (!pulled || typeof pulled !== 'object') {
-            throw new Error('Could not read current cloud document before pushing. Changes stay queued locally.');
-          }
-
-          const isNewDoc = Boolean(pulled.__notFound);
-          const cloudDoc = isNewDoc ? {} : pulled;
-          const precondition: FirestorePrecondition | undefined = isNewDoc
-            ? { exists: false }
-            : typeof (pulled as any)._updateTime === 'string' && (pulled as any)._updateTime
-              ? { updateTime: (pulled as any)._updateTime }
-              : undefined;
-
-          // Monotonically increment rev from the pre-push read
-          const prevRev =
-            typeof cloudDoc.rev === 'number' && Number.isFinite(cloudDoc.rev) && cloudDoc.rev >= 0
-              ? Math.trunc(cloudDoc.rev)
-              : 0;
-          const nextRev = prevRev + 1;
-
-          // Merge cloud + local delete lists, then strip any restored/re-added shift IDs & content keys
-          const rawMergedIds: Record<string, any> = {
-            ...(cloudDoc?.deletedShiftIds && typeof cloudDoc.deletedShiftIds === 'object'
-              ? cloudDoc.deletedShiftIds
-              : {}),
-            ...incomingDeletedIds,
+      return enqueueCloudWrite(async () => {
+        if (!isStillSignedInAsTarget()) {
+          return {
+            ok: false,
+            freshCloudLogs: null,
+            cloudDeletedIds: {},
+            cloudDeletedKeys: {},
+            rev: 0,
           };
-          const rawMergedKeys: Record<string, any> = {
-            ...(cloudDoc?.deletedShiftKeys && typeof cloudDoc.deletedShiftKeys === 'object'
-              ? cloudDoc.deletedShiftKeys
-              : {}),
-            ...incomingDeletedKeys,
-          };
-
-          for (const restoredItem of restoredSet) {
-            delete rawMergedIds[restoredItem];
-            delete rawMergedKeys[restoredItem];
-          }
-
-          const cloudDeletedIds = capCloudDeletedIds(rawMergedIds, MAX_CONFIRMED_TOMBSTONES);
-          // Never trim deletedShiftKeys below 2000 entries or 365 days
-          const cloudDeletedKeys = pruneDeletedShiftKeys(rawMergedKeys, null);
-
-          // 2. Filter outgoing logs against BOTH delete lists (IDs and content keys)
-          const filteredLocalLogs = filterLogsWithTombstones(
-            sanitizedData.logs || {},
-            {},
-            cloudDeletedIds,
-            {},
-            cloudDeletedKeys
-          );
-
-          const cloudLogs: Record<string, any> =
-            cloudDoc && typeof cloudDoc === 'object' && cloudDoc.logs && typeof cloudDoc.logs === 'object'
-              ? cloudDoc.logs
-              : {};
-
-          const allKnownCloudDates = new Set<string>([
-            ...Object.keys(cloudLogs),
-            ...removedLogDates.filter(isValidFirestoreFieldKey),
-          ]);
-
-          const exactLogsToSave: LogsState = {};
-          for (const [dateKey, shifts] of Object.entries(filteredLocalLogs)) {
-            if (isValidFirestoreFieldKey(dateKey) && Array.isArray(shifts) && shifts.length > 0) {
-              exactLogsToSave[dateKey] = shifts.map(s => ({ ...s }));
-            }
-          }
-
-          for (const dateKey of allKnownCloudDates) {
-            if (!exactLogsToSave[dateKey] || exactLogsToSave[dateKey].length === 0) {
-              delete exactLogsToSave[dateKey];
-            }
-          }
-
-          const baseCloudFields =
-            cloudDoc && typeof cloudDoc === 'object' ? sanitizeForFirestore(cloudDoc) : {};
-          delete baseCloudFields.name;
-          delete baseCloudFields.createTime;
-          delete baseCloudFields.updateTime;
-
-          const finalPayload: Record<string, any> = sanitizeForFirestore({
-            ...baseCloudFields,
-            ...sanitizedData,
-            schemaVersion: SCHEMA_VERSION,
-            rev: nextRev,
-            logs: exactLogsToSave,
-            deletedShiftIds: cloudDeletedIds,
-            deletedShiftKeys: cloudDeletedKeys,
-          });
-
-          try {
-            // 3. Single authoritative cloud write via Firestore REST v1 with currentDocument.updateTime precondition
-            // (SDK setDoc intentionally omitted: REST PATCH is the ONLY cloud write)
-            await directRestSync(activeUser, finalPayload, isAuthoritative, precondition);
-            committedDeletedIds = cloudDeletedIds;
-            committedDeletedKeys = cloudDeletedKeys;
-            committedRev = nextRev;
-            break;
-          } catch (writeErr: any) {
-            if (attempt < maxRetries && isPreconditionConflictError(writeErr)) {
-              console.warn(
-                `[Firestore Sync] Precondition conflict on attempt ${attempt + 1}/${maxRetries + 1}; re-reading cloud copy and retrying...`
-              );
-              continue;
-            }
-            throw writeErr;
-          }
         }
 
-        // 4. Fresh read of the cloud copy to confirm tombstoned shifts are actually gone in Firestore
-        let freshCloudLogs: LogsState | null = null;
+        const maxRetries = 3;
+        let committedDeletedIds: Record<string, number> = {};
+        let committedDeletedKeys: DeletedKeyMap = {};
+        let committedRev = 1;
+        let prefetchedPull: any = null;
+
         try {
-          const freshRead = await withRejectTimeout(
-            directRestPull(activeUser),
-            6000,
-            'Post-push cloud verification read timed out'
-          );
-          if (freshRead && !freshRead.__notFound) {
-            freshCloudLogs = normalizeLogs(freshRead.logs, false);
-          } else if (freshRead?.__notFound) {
-            freshCloudLogs = {};
-          }
-        } catch (verifyErr) {
-          console.warn('Post-push verification read skipped (tombstones will confirm on next read):', verifyErr);
-        }
+          for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            if (!isStillSignedInAsTarget()) {
+              return {
+                ok: false,
+                freshCloudLogs: null,
+                cloudDeletedIds: {},
+                cloudDeletedKeys: {},
+                rev: 0,
+              };
+            }
 
-        reportSyncSuccess();
-        return {
-          ok: true,
-          freshCloudLogs,
-          cloudDeletedIds: committedDeletedIds,
-          cloudDeletedKeys: committedDeletedKeys,
-          rev: committedRev,
-        };
-      } catch (e: any) {
-        reportSyncError(e, { suppressEvent: suppressErrorEvent });
-        const msg = e instanceof Error ? e.message : String(e);
-        if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient')) {
-          handleFirestoreError(e, OperationType.WRITE, pathForWrite);
+            // 1. Mandatory pre-push read: NEVER write unless the current cloud copy was read successfully
+            const pulled =
+              prefetchedPull !== null
+                ? prefetchedPull
+                : await withRejectTimeout(
+                    directRestPull(activeUser),
+                    8000,
+                    'Cloud pre-push read timed out. Changes stay saved locally and will retry.'
+                  );
+            prefetchedPull = null;
+
+            if (!isStillSignedInAsTarget()) {
+              return {
+                ok: false,
+                freshCloudLogs: null,
+                cloudDeletedIds: {},
+                cloudDeletedKeys: {},
+                rev: 0,
+              };
+            }
+
+            if (!pulled || typeof pulled !== 'object') {
+              throw new Error('Could not read current cloud document before pushing. Changes stay queued locally.');
+            }
+
+            const isNewDoc = Boolean(pulled.__notFound);
+            const cloudDoc = isNewDoc ? {} : pulled;
+            const prevUpdateTime =
+              !isNewDoc && typeof (pulled as any)._updateTime === 'string' && (pulled as any)._updateTime
+                ? (pulled as any)._updateTime
+                : null;
+
+            const precondition: FirestorePrecondition | undefined = isNewDoc
+              ? { exists: false }
+              : prevUpdateTime
+                ? { updateTime: prevUpdateTime }
+                : undefined;
+
+            // Monotonically increment rev from the pre-push read
+            const prevRev =
+              typeof cloudDoc.rev === 'number' && Number.isFinite(cloudDoc.rev) && cloudDoc.rev >= 0
+                ? Math.trunc(cloudDoc.rev)
+                : 0;
+            const nextRev = prevRev + 1;
+
+            // Merge cloud + local delete lists, then strip any restored/re-added shift IDs & content keys
+            const rawMergedIds: Record<string, any> = {
+              ...(cloudDoc?.deletedShiftIds && typeof cloudDoc.deletedShiftIds === 'object'
+                ? cloudDoc.deletedShiftIds
+                : {}),
+              ...incomingDeletedIds,
+            };
+            const rawMergedKeys: Record<string, any> = {
+              ...(cloudDoc?.deletedShiftKeys && typeof cloudDoc.deletedShiftKeys === 'object'
+                ? cloudDoc.deletedShiftKeys
+                : {}),
+              ...incomingDeletedKeys,
+            };
+
+            for (const restoredItem of restoredSet) {
+              delete rawMergedIds[restoredItem];
+              delete rawMergedKeys[restoredItem];
+            }
+
+            const cloudDeletedIds = capCloudDeletedIds(rawMergedIds, MAX_CONFIRMED_TOMBSTONES);
+            // Never trim deletedShiftKeys below 2000 entries or 365 days
+            const cloudDeletedKeys = pruneDeletedShiftKeys(rawMergedKeys, null);
+
+            // 2. Filter outgoing logs against BOTH delete lists (IDs and content keys)
+            const filteredLocalLogs = filterLogsWithTombstones(
+              sanitizedData.logs || {},
+              {},
+              cloudDeletedIds,
+              {},
+              cloudDeletedKeys
+            );
+
+            const cloudLogs: Record<string, any> =
+              cloudDoc && typeof cloudDoc === 'object' && cloudDoc.logs && typeof cloudDoc.logs === 'object'
+                ? cloudDoc.logs
+                : {};
+
+            const allKnownCloudDates = new Set<string>([
+              ...Object.keys(cloudLogs),
+              ...removedLogDates.filter(isValidFirestoreFieldKey),
+            ]);
+
+            const exactLogsToSave: LogsState = {};
+            for (const [dateKey, shifts] of Object.entries(filteredLocalLogs)) {
+              if (isValidFirestoreFieldKey(dateKey) && Array.isArray(shifts) && shifts.length > 0) {
+                exactLogsToSave[dateKey] = shifts.map(s => ({ ...s }));
+              }
+            }
+
+            for (const dateKey of allKnownCloudDates) {
+              if (!exactLogsToSave[dateKey] || exactLogsToSave[dateKey].length === 0) {
+                delete exactLogsToSave[dateKey];
+              }
+            }
+
+            const baseCloudFields =
+              cloudDoc && typeof cloudDoc === 'object' ? sanitizeForFirestore(cloudDoc) : {};
+            delete baseCloudFields.name;
+            delete baseCloudFields.createTime;
+            delete baseCloudFields.updateTime;
+
+            const finalPayload: Record<string, any> = sanitizeForFirestore({
+              ...baseCloudFields,
+              ...sanitizedData,
+              schemaVersion: SCHEMA_VERSION,
+              rev: nextRev,
+              logs: exactLogsToSave,
+              deletedShiftIds: cloudDeletedIds,
+              deletedShiftKeys: cloudDeletedKeys,
+            });
+
+            try {
+              if (!isStillSignedInAsTarget()) {
+                return {
+                  ok: false,
+                  freshCloudLogs: null,
+                  cloudDeletedIds: {},
+                  cloudDeletedKeys: {},
+                  rev: 0,
+                };
+              }
+
+              // 3. Single authoritative cloud write via Firestore REST v1 with currentDocument.updateTime precondition
+              // (SDK setDoc intentionally omitted: REST PATCH is the ONLY cloud write)
+              await directRestSync(activeUser, finalPayload, isAuthoritative, precondition, {
+                suppress403ConsoleLog: attempt < maxRetries,
+              });
+              committedDeletedIds = cloudDeletedIds;
+              committedDeletedKeys = cloudDeletedKeys;
+              committedRev = nextRev;
+              break;
+            } catch (writeErr: any) {
+              if (!isStillSignedInAsTarget()) {
+                return {
+                  ok: false,
+                  freshCloudLogs: null,
+                  cloudDeletedIds: {},
+                  cloudDeletedKeys: {},
+                  rev: 0,
+                };
+              }
+
+              if (attempt < maxRetries && isPreconditionConflictError(writeErr)) {
+                console.warn(
+                  `[Firestore Sync] Precondition conflict on attempt ${attempt + 1}/${maxRetries + 1}; re-reading cloud copy and retrying...`
+                );
+                continue;
+              }
+
+              // Firestore evaluates Security Rules (`rev == resource.data.rev + 1`) BEFORE `currentDocument.updateTime`.
+              // When another device/tab concurrently incremented `rev`, Firestore returns HTTP 403 PERMISSION_DENIED.
+              // Re-read the cloud doc to distinguish a concurrent `rev` race from a true permission error.
+              if (attempt < maxRetries && writeErr?.status === 403) {
+                const recheck = await withRejectTimeout(
+                  directRestPull(activeUser),
+                  6000,
+                  'Cloud conflict re-read timed out.'
+                ).catch(() => null);
+
+                if (recheck && typeof recheck === 'object') {
+                  const recheckIsNew = Boolean(recheck.__notFound);
+                  const recheckRev =
+                    !recheckIsNew && typeof recheck.rev === 'number' && Number.isFinite(recheck.rev) && recheck.rev >= 0
+                      ? Math.trunc(recheck.rev)
+                      : 0;
+                  const recheckUpdateTime =
+                    !recheckIsNew && typeof (recheck as any)._updateTime === 'string'
+                      ? (recheck as any)._updateTime
+                      : null;
+
+                  if (
+                    recheckIsNew !== isNewDoc ||
+                    recheckRev !== prevRev ||
+                    recheckUpdateTime !== prevUpdateTime
+                  ) {
+                    console.warn(
+                      `[Firestore Sync] Concurrent rev update detected (rev ${prevRev} -> ${recheckRev}) on attempt ${attempt + 1}/${maxRetries + 1}; retrying...`
+                    );
+                    prefetchedPull = recheck;
+                    continue;
+                  }
+                }
+
+                console.error(`[Firestore Security Rules Rejection HTTP 403] ${writeErr.message}`);
+              }
+
+              throw writeErr;
+            }
+          }
+
+          if (!isStillSignedInAsTarget()) {
+            return {
+              ok: false,
+              freshCloudLogs: null,
+              cloudDeletedIds: {},
+              cloudDeletedKeys: {},
+              rev: 0,
+            };
+          }
+
+          // 4. Fresh read of the cloud copy to confirm tombstoned shifts are actually gone in Firestore
+          let freshCloudLogs: LogsState | null = null;
+          try {
+            const freshRead = await withRejectTimeout(
+              directRestPull(activeUser),
+              6000,
+              'Post-push cloud verification read timed out'
+            );
+            if (freshRead && !freshRead.__notFound) {
+              freshCloudLogs = normalizeLogs(freshRead.logs, false);
+            } else if (freshRead?.__notFound) {
+              freshCloudLogs = {};
+            }
+          } catch (verifyErr) {
+            console.warn('Post-push verification read skipped (tombstones will confirm on next read):', verifyErr);
+          }
+
+          if (!isStillSignedInAsTarget()) {
+            return {
+              ok: false,
+              freshCloudLogs: null,
+              cloudDeletedIds: {},
+              cloudDeletedKeys: {},
+              rev: 0,
+            };
+          }
+
+          reportSyncSuccess();
+          return {
+            ok: true,
+            freshCloudLogs,
+            cloudDeletedIds: committedDeletedIds,
+            cloudDeletedKeys: committedDeletedKeys,
+            rev: committedRev,
+          };
+        } catch (e: any) {
+          if (!isStillSignedInAsTarget()) {
+            return {
+              ok: false,
+              freshCloudLogs: null,
+              cloudDeletedIds: {},
+              cloudDeletedKeys: {},
+              rev: 0,
+            };
+          }
+          reportSyncError(e, { suppressEvent: suppressErrorEvent });
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('insufficient')) {
+            handleFirestoreError(e, OperationType.WRITE, pathForWrite);
+          }
+          throw e;
         }
-        throw e;
-      }
+      });
     },
     [user, reportSyncSuccess, reportSyncError]
   );

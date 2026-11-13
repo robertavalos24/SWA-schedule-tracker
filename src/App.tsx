@@ -38,7 +38,7 @@ export default function App() {
     settings, updateSettings, overwriteSettings, cardPrefs, updateCardPrefs, theme, toggleTheme, setTheme,
     viewMonth, setViewMonth, viewYear, setViewYear, isYearView, setIsYearView, clearLogs,
     direction, changeMonth, changeYear, isLocked, setIsLocked,
-    lockedMonths, toggleLockMonth, setLockedMonths, showSavedIndicator, syncToGoogleSheets, forceSyncToCloud, pullFromCloud
+    lockedMonths, toggleLockMonth, setLockedMonths, updateLockedMonths, showSavedIndicator, syncToGoogleSheets, forceSyncToCloud, pullFromCloud
   } = useScheduleData();
 
   const { modals: modalsState, openModal, closeModal } = useModalStore();
@@ -1481,8 +1481,7 @@ export default function App() {
       }
 
       if (data.backup_metadata?.locked_months !== undefined && Array.isArray(data.backup_metadata.locked_months)) {
-        setLockedMonths(data.backup_metadata.locked_months);
-        localStorage.setItem('swa_lockedMonths', JSON.stringify(data.backup_metadata.locked_months));
+        updateLockedMonths(data.backup_metadata.locked_months);
       }
       
       setImportMessage("Backup Restored!");
@@ -1650,6 +1649,15 @@ export default function App() {
         }}
       />
       
+      {isInitializingAuth ? (
+        <div
+          data-testid="auth-initializing"
+          className="max-w-[1600px] w-full mx-auto my-12 px-4 flex flex-col items-center justify-center gap-3 text-[var(--text-muted)]"
+        >
+          <div className="w-7 h-7 rounded-full border-2 border-[var(--swa-blue)] border-t-transparent animate-spin" />
+          <span className="text-xs font-bold uppercase tracking-wider">Loading account status...</span>
+        </div>
+      ) : (
       <motion.div 
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
@@ -1817,6 +1825,7 @@ export default function App() {
           </div>
         )}
       </motion.div>
+      )}
 
       <footer className="mt-12 mb-20 px-6 text-center">
         <p className="text-[10px] text-[var(--text-muted)] max-w-2xl mx-auto leading-relaxed opacity-60">
